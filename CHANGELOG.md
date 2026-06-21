@@ -26,6 +26,10 @@ To add an entry:
 
 - **docs:** reset `docs/project-plan.md` to a generic, empty roadmap template (the §3/§5/§6/§8 framework is preserved so the Squad agents still resolve their gates).
 
+### Fixed
+
+- **scripts:** restore the UTF-8 BOM on 15 PowerShell files that lost it during the genericization token-rewrite, fixing the `PSUseBOMForUnicodeEncodedFile` PSScriptAnalyzer failure (#1).
+
 ### Removed
 
 - **docs:** remove lab-only build-up and test working docs — the archived v1 plan, the wave-0 smoke-test log, the repo-consistency-housekeeping and role-group-backing audits, and the agentic-process-modernization plan (references repointed to surviving canonical docs).
