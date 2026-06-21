@@ -29,3 +29,7 @@ To add an entry:
 ### Removed
 
 - **docs:** remove lab-only build-up and test working docs — the archived v1 plan, the wave-0 smoke-test log, the repo-consistency-housekeeping and role-group-backing audits, and the agentic-process-modernization plan (references repointed to surviving canonical docs).
+
+### Documentation
+
+- **docs:** add a README quick-start and a detailed [`docs/tenant-onboarding.md`](docs/tenant-onboarding.md) guide for the clone → `@operator-tenant` → secrets/OIDC → deploy flow (#1).
