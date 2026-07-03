@@ -1,0 +1,1516 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Purview-as-Code — declarative Microsoft Purview governance</title>
+  <meta name="description" content="A tenant-neutral template that manages a Microsoft Purview environment as version-controlled code across two planes: control (Bicep) and data (YAML + PowerShell), deployed by GitHub Actions." />
+  <style>
+    :root {
+      --bg: #0f1020;
+      --bg-soft: #171833;
+      --surface: #1d1f3d;
+      --surface-2: #24274d;
+      --border: #33366b;
+      --text: #e8e9f5;
+      --muted: #a9abce;
+      --accent: #7b61ff;
+      --accent-2: #29c8c8;
+      --accent-3: #ffb020;
+      --control: #7b61ff;
+      --data: #29c8c8;
+      --code-bg: #0b0c1a;
+      --radius: 14px;
+      --maxw: 1080px;
+      --shadow: 0 10px 40px rgba(0,0,0,.35);
+    }
+
+    * { box-sizing: border-box; }
+
+    html { scroll-behavior: smooth; }
+
+    body {
+      margin: 0;
+      font-family: "Segoe UI", system-ui, -apple-system, Roboto, Helvetica, Arial, sans-serif;
+      color: var(--text);
+      background:
+        radial-gradient(1200px 600px at 80% -10%, rgba(123,97,255,.28), transparent 60%),
+        radial-gradient(900px 500px at 0% 10%, rgba(41,200,200,.16), transparent 55%),
+        var(--bg);
+      line-height: 1.6;
+      -webkit-font-smoothing: antialiased;
+    }
+
+    a { color: var(--accent-2); text-decoration: none; }
+    a:hover { text-decoration: underline; }
+
+    .wrap { max-width: var(--maxw); margin: 0 auto; padding: 0 24px; }
+
+    /* ---------- Nav ---------- */
+    header.nav {
+      position: sticky;
+      top: 0;
+      z-index: 20;
+      backdrop-filter: blur(10px);
+      background: rgba(15,16,32,.72);
+      border-bottom: 1px solid var(--border);
+    }
+    .nav-inner {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      height: 62px;
+      gap: 16px;
+    }
+    .brand { display: flex; align-items: center; gap: 10px; font-weight: 700; letter-spacing: .2px; }
+    .brand .logo {
+      width: 30px; height: 30px; border-radius: 8px;
+      background: linear-gradient(135deg, var(--accent), var(--accent-2));
+      display: grid; place-items: center; font-size: 15px; color: #0b0c1a; font-weight: 800;
+    }
+    nav.links { display: flex; gap: 22px; }
+    nav.links a { color: var(--muted); font-size: 14px; font-weight: 500; }
+    nav.links a:hover { color: var(--text); text-decoration: none; }
+    @media (max-width: 760px) { nav.links { display: none; } }
+
+    /* ---------- Hero ---------- */
+    .hero { padding: 76px 0 40px; }
+    .badge {
+      display: inline-flex; align-items: center; gap: 8px;
+      font-size: 12.5px; font-weight: 600; letter-spacing: .3px;
+      color: var(--accent-3);
+      background: rgba(255,176,32,.1);
+      border: 1px solid rgba(255,176,32,.35);
+      padding: 6px 12px; border-radius: 999px; margin-bottom: 22px;
+    }
+    .hero h1 {
+      font-size: clamp(34px, 5.2vw, 58px);
+      line-height: 1.05; margin: 0 0 18px;
+      letter-spacing: -.5px;
+    }
+    .hero h1 .grad {
+      background: linear-gradient(100deg, var(--accent) 10%, var(--accent-2) 90%);
+      -webkit-background-clip: text; background-clip: text; color: transparent;
+    }
+    .hero p.lead { font-size: clamp(16px, 2.1vw, 20px); color: var(--muted); max-width: 720px; margin: 0 0 30px; }
+    .cta-row { display: flex; flex-wrap: wrap; gap: 14px; }
+    .btn {
+      display: inline-flex; align-items: center; gap: 9px;
+      padding: 12px 22px; border-radius: 10px; font-weight: 600; font-size: 15px;
+      border: 1px solid transparent; cursor: pointer; transition: transform .12s ease, box-shadow .12s ease;
+    }
+    .btn:hover { text-decoration: none; transform: translateY(-1px); }
+    .btn-primary { background: linear-gradient(135deg, var(--accent), #5a43e0); color: #fff; box-shadow: 0 8px 24px rgba(123,97,255,.4); }
+    .btn-ghost { background: transparent; border-color: var(--border); color: var(--text); }
+    .btn-ghost:hover { border-color: var(--accent-2); }
+
+    /* ---------- Section scaffolding ---------- */
+    section { padding: 56px 0; border-top: 1px solid rgba(51,54,107,.5); }
+    section:first-of-type { border-top: none; }
+    .eyebrow { text-transform: uppercase; letter-spacing: 2px; font-size: 12px; font-weight: 700; color: var(--accent-2); margin: 0 0 10px; }
+    h2.section-title { font-size: clamp(26px, 3.6vw, 38px); margin: 0 0 14px; letter-spacing: -.3px; }
+    .section-intro { color: var(--muted); max-width: 760px; font-size: 17px; margin: 0 0 34px; }
+
+    /* ---------- Cards ---------- */
+    .grid { display: grid; gap: 20px; }
+    .grid-3 { grid-template-columns: repeat(3, 1fr); }
+    .grid-2 { grid-template-columns: repeat(2, 1fr); }
+    @media (max-width: 860px) { .grid-3, .grid-2 { grid-template-columns: 1fr; } }
+
+    .card {
+      background: linear-gradient(180deg, var(--surface), var(--bg-soft));
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 26px;
+    }
+    .card h3 { margin: 0 0 10px; font-size: 19px; }
+    .card p { margin: 0; color: var(--muted); font-size: 15px; }
+    .icon {
+      width: 42px; height: 42px; border-radius: 11px; margin-bottom: 16px;
+      display: grid; place-items: center; font-size: 20px;
+      background: rgba(123,97,255,.14); border: 1px solid rgba(123,97,255,.3);
+    }
+
+    /* ---------- Two-plane ---------- */
+    .planes { display: grid; grid-template-columns: 1fr 1fr; gap: 22px; }
+    @media (max-width: 860px) { .planes { grid-template-columns: 1fr; } }
+    .plane {
+      border-radius: var(--radius); padding: 26px; border: 1px solid var(--border);
+      background: var(--surface);
+      position: relative; overflow: hidden;
+    }
+    .plane::before { content: ""; position: absolute; inset: 0 0 auto 0; height: 4px; }
+    .plane.control::before { background: var(--control); }
+    .plane.data::before { background: var(--data); }
+    .plane .tag { font-size: 12px; font-weight: 700; letter-spacing: 1px; text-transform: uppercase; }
+    .plane.control .tag { color: var(--control); }
+    .plane.data .tag { color: var(--data); }
+    .plane h3 { margin: 8px 0 12px; font-size: 21px; }
+    .plane ul { margin: 14px 0 0; padding-left: 18px; color: var(--muted); font-size: 14.5px; }
+    .plane ul li { margin-bottom: 7px; }
+    .kv { display: flex; gap: 10px; font-size: 13.5px; margin-top: 6px; }
+    .kv .k { color: var(--muted); min-width: 76px; }
+    .kv .v { color: var(--text); font-weight: 600; }
+    code.inline { background: var(--code-bg); border: 1px solid var(--border); padding: 2px 7px; border-radius: 6px; font-size: 13px; color: #d9d6ff; }
+
+    /* ---------- Pipeline ---------- */
+    .pipe { display: flex; flex-wrap: wrap; align-items: stretch; gap: 12px; }
+    .pipe .step {
+      flex: 1 1 180px; background: var(--surface); border: 1px solid var(--border);
+      border-radius: 12px; padding: 18px;
+    }
+    .pipe .step .n { font-size: 12px; color: var(--accent-2); font-weight: 700; letter-spacing: 1px; }
+    .pipe .step h4 { margin: 6px 0 6px; font-size: 16px; }
+    .pipe .step p { margin: 0; color: var(--muted); font-size: 13.5px; }
+    .arrow { align-self: center; color: var(--accent); font-size: 22px; }
+    @media (max-width: 760px) { .arrow { transform: rotate(90deg); } }
+
+    /* ---------- Steps (numbered) ---------- */
+    ol.steps { list-style: none; counter-reset: s; padding: 0; margin: 0; }
+    ol.steps > li {
+      counter-increment: s; position: relative; padding: 20px 20px 20px 76px;
+      background: var(--surface); border: 1px solid var(--border); border-radius: 12px; margin-bottom: 14px;
+    }
+    ol.steps > li::before {
+      content: counter(s); position: absolute; left: 20px; top: 18px;
+      width: 38px; height: 38px; border-radius: 10px;
+      background: linear-gradient(135deg, var(--accent), var(--accent-2));
+      color: #0b0c1a; font-weight: 800; display: grid; place-items: center; font-size: 17px;
+    }
+    ol.steps h4 { margin: 0 0 5px; font-size: 17px; }
+    ol.steps p { margin: 0; color: var(--muted); font-size: 14.5px; }
+
+    /* ---------- Layout tree ---------- */
+    pre.tree {
+      background: var(--code-bg); border: 1px solid var(--border); border-radius: var(--radius);
+      padding: 22px; overflow-x: auto; font-size: 13px; line-height: 1.7;
+      font-family: "Cascadia Code", "Consolas", ui-monospace, monospace; color: #cdd0f5; margin: 0;
+    }
+    pre.tree .c { color: #6f74a8; }
+    pre.tree .d { color: #8fe3e3; }
+
+    /* ---------- Principles ---------- */
+    .principle { display: flex; gap: 14px; align-items: flex-start; }
+    .principle .dot { width: 10px; height: 10px; border-radius: 50%; margin-top: 8px; flex: none; background: var(--accent); box-shadow: 0 0 0 4px rgba(123,97,255,.16); }
+    .principle h4 { margin: 0 0 4px; font-size: 16px; }
+    .principle p { margin: 0; color: var(--muted); font-size: 14.5px; }
+
+    /* ---------- References ---------- */
+    .refs { display: grid; grid-template-columns: repeat(2, 1fr); gap: 12px; }
+    @media (max-width: 760px) { .refs { grid-template-columns: 1fr; } }
+    .ref {
+      display: flex; gap: 12px; align-items: center; padding: 14px 16px;
+      background: var(--surface); border: 1px solid var(--border); border-radius: 10px; font-size: 14px;
+    }
+    .ref .ms { flex: none; width: 26px; height: 26px; border-radius: 6px; background: #fff; display: grid; place-items: center; }
+    .ref .ms span { display: grid; grid-template-columns: 1fr 1fr; gap: 1.5px; }
+    .ref .ms i { width: 5px; height: 5px; display: block; }
+    .ref .ms i:nth-child(1){ background:#f25022; } .ref .ms i:nth-child(2){ background:#7fba00; }
+    .ref .ms i:nth-child(3){ background:#00a4ef; } .ref .ms i:nth-child(4){ background:#ffb900; }
+
+    /* ---------- Callout ---------- */
+    .callout {
+      background: linear-gradient(135deg, rgba(123,97,255,.14), rgba(41,200,200,.1));
+      border: 1px solid var(--border); border-radius: var(--radius); padding: 22px 24px;
+      display: flex; gap: 16px; align-items: flex-start;
+    }
+    .callout .mark { font-size: 22px; }
+    .callout p { margin: 0; color: var(--text); font-size: 15px; }
+    .callout code.inline { font-size: 12.5px; }
+
+    /* ---------- Footer ---------- */
+    footer { border-top: 1px solid var(--border); padding: 34px 0 48px; color: var(--muted); font-size: 13.5px; }
+    footer .foot-inner { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 14px; }
+    footer a { color: var(--muted); }
+    footer a:hover { color: var(--text); }
+
+    /* ---------- Doc side panel (slide-in reader) ---------- */
+    .doc-overlay {
+      position: fixed; inset: 0; z-index: 90;
+      background: rgba(6,7,18,.6); backdrop-filter: blur(2px);
+      opacity: 0; visibility: hidden; transition: opacity .25s ease, visibility .25s ease;
+    }
+    .doc-overlay.open { opacity: 1; visibility: visible; }
+
+    .doc-panel {
+      position: fixed; top: 0; right: 0; z-index: 100;
+      height: 100vh; width: min(720px, 94vw);
+      background: var(--bg-soft); border-left: 1px solid var(--border);
+      box-shadow: -20px 0 60px rgba(0,0,0,.5);
+      transform: translateX(100%); transition: transform .3s cubic-bezier(.22,.61,.36,1);
+      display: flex; flex-direction: column;
+    }
+    .doc-panel.open { transform: translateX(0); }
+
+    .doc-head {
+      flex: none; display: flex; align-items: center; gap: 12px;
+      padding: 16px 20px; border-bottom: 1px solid var(--border);
+      background: rgba(29,31,61,.7); backdrop-filter: blur(8px);
+    }
+    .doc-head .doc-title { font-weight: 700; font-size: 15px; flex: 1; min-width: 0;
+      white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .doc-head .doc-path { font-size: 12px; color: var(--muted); font-family: "Cascadia Code","Consolas",ui-monospace,monospace; }
+    .doc-head a.doc-raw { font-size: 12.5px; color: var(--accent-2); white-space: nowrap; }
+    .doc-head button.doc-close {
+      flex: none; width: 34px; height: 34px; border-radius: 9px; cursor: pointer;
+      background: var(--surface-2); border: 1px solid var(--border); color: var(--text);
+      font-size: 18px; line-height: 1; display: grid; place-items: center;
+    }
+    .doc-head button.doc-close:hover { border-color: var(--accent-2); color: var(--accent-2); }
+
+    .doc-body { flex: 1; overflow-y: auto; padding: 28px 34px 60px; scroll-behavior: smooth; }
+    .doc-loading, .doc-error { color: var(--muted); font-size: 15px; padding: 20px 0; }
+    .doc-error strong { color: var(--text); }
+    .doc-error .btn { margin-top: 14px; }
+    .doc-spinner {
+      width: 20px; height: 20px; border-radius: 50%; display: inline-block; vertical-align: -4px; margin-right: 10px;
+      border: 2px solid var(--border); border-top-color: var(--accent-2); animation: spin .8s linear infinite;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+
+    /* rendered markdown */
+    .doc-body h1, .doc-body h2, .doc-body h3, .doc-body h4 { line-height: 1.25; letter-spacing: -.2px; scroll-margin-top: 12px; }
+    .doc-body h1 { font-size: 27px; margin: 4px 0 18px; }
+    .doc-body h2 { font-size: 21px; margin: 30px 0 12px; padding-bottom: 8px; border-bottom: 1px solid var(--border); }
+    .doc-body h3 { font-size: 17px; margin: 24px 0 10px; }
+    .doc-body h4 { font-size: 15px; margin: 20px 0 8px; color: var(--muted); }
+    .doc-body p { color: var(--text); font-size: 15px; margin: 0 0 14px; }
+    .doc-body a { color: var(--accent-2); }
+    .doc-body ul, .doc-body ol { margin: 0 0 16px; padding-left: 24px; }
+    .doc-body li { margin: 5px 0; color: var(--text); font-size: 15px; }
+    .doc-body code {
+      background: var(--code-bg); border: 1px solid var(--border); border-radius: 5px;
+      padding: 1px 6px; font-size: 13px; color: #d9d6ff;
+      font-family: "Cascadia Code","Consolas",ui-monospace,monospace;
+    }
+    .doc-body pre.cb {
+      background: var(--code-bg); border: 1px solid var(--border); border-radius: 10px;
+      padding: 16px 18px; overflow-x: auto; margin: 0 0 16px;
+    }
+    .doc-body pre.cb code { background: none; border: none; padding: 0; font-size: 12.5px; color: #cdd0f5; line-height: 1.6; display: block; }
+    .doc-body blockquote {
+      margin: 0 0 16px; padding: 10px 16px; border-left: 3px solid var(--accent);
+      background: rgba(123,97,255,.08); border-radius: 0 8px 8px 0; color: var(--muted);
+    }
+    .doc-body blockquote.alert-note { border-left-color: var(--accent-2); background: rgba(41,200,200,.08); }
+    .doc-body blockquote.alert-warning { border-left-color: var(--accent-3); background: rgba(255,176,32,.09); }
+    .doc-body blockquote.alert-important { border-left-color: var(--accent); background: rgba(123,97,255,.1); }
+    .doc-body blockquote .alert-label { display: block; font-weight: 700; font-size: 12px; letter-spacing: .5px; text-transform: uppercase; margin-bottom: 6px; color: var(--text); }
+    .doc-body table { width: 100%; border-collapse: collapse; margin: 0 0 18px; font-size: 13.5px; display: block; overflow-x: auto; }
+    .doc-body th, .doc-body td { border: 1px solid var(--border); padding: 8px 11px; text-align: left; vertical-align: top; }
+    .doc-body th { background: var(--surface-2); font-weight: 700; }
+    .doc-body tr:nth-child(even) td { background: rgba(36,39,77,.4); }
+    .doc-body hr { border: none; border-top: 1px solid var(--border); margin: 24px 0; }
+    .doc-body img { max-width: 100%; border-radius: 8px; }
+    body.doc-open { overflow: hidden; }
+  </style>
+</head>
+<body>
+
+  <header class="nav">
+    <div class="wrap nav-inner">
+      <div class="brand"><span class="logo">P</span> Purview-as-Code</div>
+      <nav class="links">
+        <a href="#what">Overview</a>
+        <a href="#planes">Two planes</a>
+        <a href="#how">How it works</a>
+        <a href="#start">Get started</a>
+        <a href="#layout">Layout</a>
+        <a href="#refs">References</a>
+      </nav>
+    </div>
+  </header>
+
+  <!-- ================= HERO ================= -->
+  <div class="hero">
+    <div class="wrap">
+      <span class="badge">● Tenant-neutral template — make it yours before deploying</span>
+      <h1>Manage <span class="grad">Microsoft Purview</span><br />as version-controlled code.</h1>
+      <p class="lead">
+        A declarative, reviewable definition of an entire Microsoft Purview environment for a single
+        tenant — both the Azure resource and the governance catalog — deployed automatically by
+        GitHub Actions. Everything is a pull request.
+      </p>
+      <div class="cta-row">
+        <a class="btn btn-primary" href="docs/kickoff-guide.md">Start with the Kickoff guide →</a>
+        <a class="btn btn-ghost" href="README.md">Read the README</a>
+        <a class="btn btn-ghost" href="#how">See how it works</a>
+      </div>
+    </div>
+  </div>
+
+  <!-- ================= WHAT ================= -->
+  <section id="what">
+    <div class="wrap">
+      <p class="eyebrow">What is this?</p>
+      <h2 class="section-title">Infrastructure-as-Code for data governance</h2>
+      <p class="section-intro">
+        Microsoft Purview does not ship a single "Purview-as-Code" product. This repository fills
+        that gap: it expresses your Purview configuration as code so every change is diff-able,
+        reviewable in a pull request, and applied by an idempotent, auditable pipeline — never by
+        hand-clicking in a portal.
+      </p>
+
+      <div class="grid grid-3">
+        <div class="card">
+          <div class="icon">📝</div>
+          <h3>Declarative</h3>
+          <p>Human-readable YAML and Bicep describe the desired state. The repo, not the portal, is the source of truth.</p>
+        </div>
+        <div class="card">
+          <div class="icon">🔁</div>
+          <h3>Idempotent</h3>
+          <p>Every apply script reads current state, diffs it, then upserts. Re-running changes nothing that already matches.</p>
+        </div>
+        <div class="card">
+          <div class="icon">🔐</div>
+          <h3>Least privilege</h3>
+          <p>GitHub Actions authenticates to Azure with short-lived OIDC tokens — no long-lived secrets stored anywhere.</p>
+        </div>
+        <div class="card">
+          <div class="icon">🧭</div>
+          <h3>Reviewable</h3>
+          <p>A pull request <em>is</em> the change-review process. Control-plane and data-plane changes never mix in one PR.</p>
+        </div>
+        <div class="card">
+          <div class="icon">🤖</div>
+          <h3>Agent-assisted</h3>
+          <p>A Squad of workspace-scoped Copilot agents intakes ideas, drafts issues, implements, and gates on owner approval.</p>
+        </div>
+        <div class="card">
+          <div class="icon">📚</div>
+          <h3>Learn-grounded</h3>
+          <p>Every resource, cmdlet, and API call cites a current Microsoft Learn page — model recall alone is never enough.</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ================= PLANES ================= -->
+  <section id="planes">
+    <div class="wrap">
+      <p class="eyebrow">The core idea</p>
+      <h2 class="section-title">Two planes, kept deliberately separate</h2>
+      <p class="section-intro">
+        A complete Purview IaC repo must manage two independent planes, each with its own API
+        surface and authentication model. A change almost always lives in exactly one of them.
+      </p>
+
+      <div class="planes">
+        <div class="plane control">
+          <span class="tag">Control plane</span>
+          <h3>The Azure resource</h3>
+          <p style="color:var(--muted);margin:0 0 12px;font-size:14.5px;">
+            The <code class="inline">Microsoft.Purview/accounts</code> resource, networking,
+            managed identity, and SKU — defined as Bicep.
+          </p>
+          <div class="kv"><span class="k">Folder</span><span class="v"><code class="inline">infra/</code></span></div>
+          <div class="kv"><span class="k">Language</span><span class="v">Bicep · Azure CLI</span></div>
+          <div class="kv"><span class="k">API</span><span class="v">Azure Resource Manager</span></div>
+          <div class="kv"><span class="k">Auth</span><span class="v">Azure RBAC (Contributor on RG)</span></div>
+          <div class="kv"><span class="k">Deploys via</span><span class="v"><code class="inline">deploy-infra.yml</code></span></div>
+        </div>
+
+        <div class="plane data">
+          <span class="tag">Data plane</span>
+          <h3>The governance catalog</h3>
+          <p style="color:var(--muted);margin:0 0 12px;font-size:14.5px;">
+            Sensitivity labels, DLP, data lifecycle & records, insider risk, communication
+            compliance, DSPM, plus Data Map collections, glossary, classifications, sources & scans.
+          </p>
+          <div class="kv"><span class="k">Folder</span><span class="v"><code class="inline">data-plane/</code> + <code class="inline">scripts/</code></span></div>
+          <div class="kv"><span class="k">Language</span><span class="v">YAML rendered by PowerShell</span></div>
+          <div class="kv"><span class="k">API</span><span class="v">Purview data-plane REST + S&amp;C PowerShell</span></div>
+          <div class="kv"><span class="k">Auth</span><span class="v">App-only identity (OIDC / cert in Key Vault)</span></div>
+          <div class="kv"><span class="k">Deploys via</span><span class="v"><code class="inline">deploy-data-plane.yml</code></span></div>
+        </div>
+      </div>
+
+      <div class="callout" style="margin-top:22px;">
+        <span class="mark">💡</span>
+        <p>
+          <strong>Why the split?</strong> The account name is the DNS hostname of the data plane
+          (<code class="inline">&lt;name&gt;.purview.azure.com</code>) and is treated as a fixed
+          input. Collections, glossary, classifications, sources, and scans are invisible to
+          ARM/Bicep — they live behind the Atlas v2 and Purview REST APIs, which is why the repo
+          ships PowerShell reconcilers driven by YAML.
+        </p>
+      </div>
+    </div>
+  </section>
+
+  <!-- ================= HOW ================= -->
+  <section id="how">
+    <div class="wrap">
+      <p class="eyebrow">How it works</p>
+      <h2 class="section-title">From pull request to deployed governance</h2>
+      <p class="section-intro">
+        A single CI/CD flow validates every change, then routes merges to the right plane by path.
+        OIDC federated credentials give GitHub Actions short-lived tokens for both Azure Resource
+        Manager and the Purview data plane — with no stored secret.
+      </p>
+
+      <div class="pipe">
+        <div class="step">
+          <div class="n">01</div>
+          <h4>Pull request</h4>
+          <p>You open a PR that changes one plane. Reviewers see the full diff of desired state.</p>
+        </div>
+        <div class="arrow">→</div>
+        <div class="step">
+          <div class="n">02</div>
+          <h4>Validate</h4>
+          <p><code class="inline">validate.yml</code> runs Bicep lint, yamllint, and PSScriptAnalyzer.</p>
+        </div>
+        <div class="arrow">→</div>
+        <div class="step">
+          <div class="n">03</div>
+          <h4>Merge to main</h4>
+          <p>Path filters decide which deploy workflow fires next.</p>
+        </div>
+        <div class="arrow">→</div>
+        <div class="step">
+          <div class="n">04</div>
+          <h4>Deploy</h4>
+          <p><code class="inline">infra/**</code> → ARM. <code class="inline">data-plane/**</code> or <code class="inline">scripts/**</code> → Purview REST APIs.</p>
+        </div>
+      </div>
+
+      <div class="grid grid-2" style="margin-top:26px;">
+        <div class="card">
+          <h3>Control-plane path</h3>
+          <p>
+            The <code class="inline">deploy-infra</code> workflow runs
+            <code class="inline">az deployment group create</code> against
+            <code class="inline">infra/main.bicep</code>, provisioning the
+            <code class="inline">Microsoft.Purview/accounts</code> resource and its dependencies.
+          </p>
+        </div>
+        <div class="card">
+          <h3>Data-plane path</h3>
+          <p>
+            The <code class="inline">deploy-data-plane</code> workflow authenticates via OIDC, then
+            each <code class="inline">Deploy-*.ps1</code> reconciler renders its YAML manifest into
+            idempotent PUT/PATCH calls against the Purview data-plane APIs. Deletes are opt-in.
+          </p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ================= GET STARTED ================= -->
+  <section id="start">
+    <div class="wrap">
+      <p class="eyebrow">Use it yourself</p>
+      <h2 class="section-title">From an empty copy to a deployable repo in six steps</h2>
+      <p class="section-intro">
+        This is a tenant-neutral template — every tenant-specific value is a documented placeholder
+        (<code class="inline">contoso</code>, <code class="inline">contoso.onmicrosoft.com</code>).
+        It will not deploy against a real tenant until you make it yours. The
+        <a href="docs/tenant-onboarding.md">tenant onboarding guide</a> has the exact commands.
+      </p>
+
+      <ol class="steps">
+        <li>
+          <h4>Get a copy</h4>
+          <p>Click <strong>Use this template</strong> on GitHub for a clean-history spin-off that can never push back, or <code class="inline">git clone</code> for a local workspace.</p>
+        </li>
+        <li>
+          <h4>Decouple it</h4>
+          <p>Run the <code class="inline">@operator-kickoff</code> agent to pick a local workspace or spin-off repo and install the no-push-back guard.</p>
+        </li>
+        <li>
+          <h4>Tailor it</h4>
+          <p>Run the <code class="inline">@operator-tenant</code> agent — it interviews you and writes your values into <code class="inline">infra/parameters/lab.yaml</code> and the identity-boundary statements.</p>
+        </li>
+        <li>
+          <h4>Review the diff</h4>
+          <p>Inspect what the agent produced, then commit it on a branch.</p>
+        </li>
+        <li>
+          <h4>Wire up identity</h4>
+          <p>Create the Microsoft Entra app + OIDC federated credential, set the GitHub Environment secrets, and set the <code class="inline">OWNER_APPROVAL_LOGIN</code> variable.</p>
+        </li>
+        <li>
+          <h4>Validate and deploy</h4>
+          <p>Run <code class="inline">az bicep build</code> and the Pester suite, then trigger the <code class="inline">deploy-infra</code> and <code class="inline">deploy-data-plane</code> workflows.</p>
+        </li>
+      </ol>
+
+      <div class="callout" style="margin-top:22px;">
+        <span class="mark">🔒</span>
+        <p>
+          <strong>Never commit real identifiers or secrets.</strong> Real tenant IDs, subscription
+          IDs, object IDs, and credentials belong in GitHub Environment secrets and are referenced
+          by name. In source, always use the zero-GUID placeholder
+          <code class="inline">00000000-0000-0000-0000-000000000000</code> and Microsoft's
+          fictitious names (<code class="inline">contoso</code>,
+          <code class="inline">fabrikam</code>, <code class="inline">adatum</code>).
+        </p>
+      </div>
+    </div>
+  </section>
+
+  <!-- ================= LAYOUT ================= -->
+  <section id="layout">
+    <div class="wrap">
+      <p class="eyebrow">Find your way around</p>
+      <h2 class="section-title">Repository layout</h2>
+      <p class="section-intro">
+        Two planes, one folder each, plus the automation and docs that hold them together. The
+        plane-to-workflow path filters depend on this separation — never put data-plane YAML under
+        <code class="inline">infra/</code>, and never put Bicep under <code class="inline">data-plane/</code>.
+      </p>
+
+      <pre class="tree">.
+├── <span class="d">.github/</span>
+│   ├── <span class="d">workflows/</span>     <span class="c"># validate + deploy-infra + deploy-data-plane</span>
+│   ├── <span class="d">instructions/</span>  <span class="c"># path-scoped Copilot rules (Bicep, PowerShell, YAML…)</span>
+│   ├── <span class="d">prompts/</span>       <span class="c"># reusable /-invoked task templates</span>
+│   └── <span class="d">agents/</span>        <span class="c"># workspace-scoped Squad agents (personas)</span>
+├── <span class="d">infra/</span>             <span class="c"># CONTROL PLANE — Bicep: Purview account + dependencies</span>
+│   ├── main.bicep
+│   ├── main.bicepparam
+│   ├── <span class="d">modules/</span>
+│   └── <span class="d">parameters/</span>
+├── <span class="d">data-plane/</span>        <span class="c"># DATA PLANE — desired-state governance content</span>
+│   ├── <span class="d">information-protection/</span>  <span class="c"># sensitivity labels + policies</span>
+│   ├── <span class="d">classifications/</span>        <span class="c"># sensitive information type catalog</span>
+│   ├── <span class="d">dlp/  data-lifecycle/  records/  irm/  dspm/</span>
+│   ├── <span class="d">collections/  glossary/  data-sources/  scans/</span>
+│   └── <span class="d">purview-role-groups/  administrative-units/</span>
+├── <span class="d">scripts/</span>           <span class="c"># PowerShell 7+ reconcilers, smoke tests, provisioning</span>
+│   ├── Connect-Purview.ps1
+│   ├── Deploy-*.ps1   <span class="c"># idempotent reconciler per data-plane solution</span>
+│   └── <span class="d">modules/</span>
+├── <span class="d">docs/</span>              <span class="c"># kickoff, onboarding, architecture, ADRs, runbooks</span>
+├── <span class="d">tests/</span>             <span class="c"># Pester 5.x unit tests (no live tenant)</span>
+├── AGENTS.md
+└── README.md</pre>
+    </div>
+  </section>
+
+  <!-- ================= PRINCIPLES ================= -->
+  <section id="principles">
+    <div class="wrap">
+      <p class="eyebrow">Non-negotiables</p>
+      <h2 class="section-title">Design principles</h2>
+      <div class="grid grid-2">
+        <div class="card">
+          <div class="principle"><span class="dot"></span><div>
+            <h4>Idempotent</h4>
+            <p>Every apply script GETs current state, diffs, then PUT/PATCHes.</p>
+          </div></div>
+        </div>
+        <div class="card">
+          <div class="principle"><span class="dot"></span><div>
+            <h4>Declarative YAML</h4>
+            <p>Human-reviewable manifests; a pull request equals a change review.</p>
+          </div></div>
+        </div>
+        <div class="card">
+          <div class="principle"><span class="dot"></span><div>
+            <h4>Least privilege</h4>
+            <p>OIDC federated credentials from GitHub to Entra — no long-lived secrets.</p>
+          </div></div>
+        </div>
+        <div class="card">
+          <div class="principle"><span class="dot"></span><div>
+            <h4>Separation of concerns</h4>
+            <p>Control-plane PRs never change catalog content, and vice versa.</p>
+          </div></div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ================= REFERENCES ================= -->
+  <section id="refs">
+    <div class="wrap">
+      <p class="eyebrow">Grounded in Microsoft Learn</p>
+      <h2 class="section-title">References</h2>
+      <p class="section-intro">
+        Microsoft Learn is the authoritative source for every recommendation in this repo. The core
+        pages behind the two-plane model:
+      </p>
+      <div class="refs">
+        <a class="ref" href="https://learn.microsoft.com/en-us/azure/templates/microsoft.purview/accounts" target="_blank" rel="noopener">
+          <span class="ms"><span><i></i><i></i><i></i><i></i></span></span>
+          Microsoft.Purview/accounts resource (Bicep / ARM)
+        </a>
+        <a class="ref" href="https://learn.microsoft.com/en-us/purview/data-gov-api-rest-data-plane" target="_blank" rel="noopener">
+          <span class="ms"><span><i></i><i></i><i></i><i></i></span></span>
+          Authenticate for Purview APIs
+        </a>
+        <a class="ref" href="https://learn.microsoft.com/en-us/rest/api/purview/" target="_blank" rel="noopener">
+          <span class="ms"><span><i></i><i></i><i></i><i></i></span></span>
+          Purview data-plane REST API reference
+        </a>
+        <a class="ref" href="https://learn.microsoft.com/en-us/purview/data-gov-classic-permissions" target="_blank" rel="noopener">
+          <span class="ms"><span><i></i><i></i><i></i><i></i></span></span>
+          Access control in Microsoft Purview
+        </a>
+        <a class="ref" href="https://learn.microsoft.com/en-us/azure/developer/github/connect-from-azure-openid-connect" target="_blank" rel="noopener">
+          <span class="ms"><span><i></i><i></i><i></i><i></i></span></span>
+          Use Azure Login with OpenID Connect
+        </a>
+        <a class="ref" href="https://docs.github.com/en/repositories/creating-and-managing-repositories/creating-a-repository-from-a-template" target="_blank" rel="noopener">
+          <span class="ms"><span><i></i><i></i><i></i><i></i></span></span>
+          Create a repository from a template
+        </a>
+      </div>
+    </div>
+  </section>
+
+  <footer>
+    <div class="wrap foot-inner">
+      <div>
+        Purview-as-Code — a tenant-neutral template for declarative Microsoft Purview governance.<br />
+        Target account placeholder: <code class="inline">contoso-lab</code> · tenant <code class="inline">contoso.onmicrosoft.com</code>.
+      </div>
+      <div>
+        <a href="docs/kickoff-guide.md">Kickoff guide</a> ·
+        <a href="docs/getting-started.md">Getting started</a> ·
+        <a href="docs/architecture.md">Architecture</a> ·
+        <a href="README.md">README</a>
+      </div>
+    </div>
+  </footer>
+
+  <!--
+    Offline snapshots of the linked docs, so the reader panel works when this page is
+    opened directly from disk (file://) where browsers block fetch of local files.
+    When the page is served over HTTP the reader fetches the live file first and only
+    falls back to these snapshots. They are generated from the source docs — do not
+    hand-edit. Refresh with `pwsh ./scripts/Update-LandingPageEmbeds.ps1`; the
+    landing-page-embeds job in .github/workflows/validate.yml fails if they drift.
+  -->
+  <!-- EMBEDDED-DOCS:START -->
+  <script type="text/markdown" data-doc="README.md">
+# Purview-as-Code — generic template
+
+> **This is a tenant-neutral template.** Every tenant-specific value is a placeholder using
+> Microsoft's documented fictitious identifiers (`contoso`, `contoso.onmicrosoft.com`). It will
+> **not** deploy against a real tenant until you make it yours. First run the **Kickoff** agent
+> [`@operator-kickoff`](.github/agents/operator-kickoff.agent.md) to choose where your copy lives
+> (a local workspace or your own GitHub repo) and sever it from this source template so it can
+> never contribute content back, per [ADR 0045](docs/adr/0045-template-kickoff-spinoff-model.md).
+> Then run the **Tenant Intake** agent [`@operator-tenant`](.github/agents/operator-tenant.agent.md),
+> or edit [`infra/parameters/lab.yaml`](infra/parameters/lab.yaml) by hand and follow
+> [Getting started](docs/getting-started.md). Placeholders to replace: GitHub org/repo, tenant
+> domain, resource group, Purview account name, Key Vault, Log Analytics, OIDC app display names,
+> CODEOWNERS handles, and the content-explorer wrapper-group object ID.
+
+Declarative, version-controlled configuration of a Microsoft Purview environment for a single tenant. Both the Azure resource (control plane) and the catalog contents (data plane) are expressed as code and deployed by GitHub Actions.
+
+> **Standing up your own environment? Start with the [Kickoff guide](docs/kickoff-guide.md)** — the opinionated end-to-end walkthrough from an empty copy to a deployed, tenant-tailored environment.
+
+> **Template repository.** This repo is enabled as a [GitHub template](https://docs.github.com/en/repositories/creating-and-managing-repositories/creating-a-repository-from-a-template) — click **Use this template** to create your own copy. A template-generated repo starts with a clean history and cannot open a pull request back to this source, which is the preferred spin-off path in [ADR 0045](docs/adr/0045-template-kickoff-spinoff-model.md).
+
+> **Target account (placeholder):** `contoso-lab` Microsoft Purview account (tenant `contoso.onmicrosoft.com`).
+
+## Quick start
+
+**New here? Start with the [Kickoff guide](docs/kickoff-guide.md)** — the opinionated end-to-end walkthrough for standing up your own environment. The six steps below are the summary; the [Tenant onboarding guide](docs/tenant-onboarding.md) has the exact commands.
+
+From an empty copy to a tailored, deployable repo in six steps.
+
+1. **Get a copy.** Click **Use this template** on GitHub (a template-generated repo has unrelated history and cannot push back to the source), or `git clone https://github.com/<your-org>/<your-repo>.git` for a local workspace.
+2. **Decouple it.** Run the **Kickoff** agent [`@operator-kickoff`](.github/agents/operator-kickoff.agent.md) to choose a local workspace or a spin-off repo and install the no-push-back guard, per [ADR 0045](docs/adr/0045-template-kickoff-spinoff-model.md). (If you used **Use this template**, GitHub already decoupled you.)
+3. **Tailor it.** Run the **Tenant Intake** agent [`@operator-tenant`](.github/agents/operator-tenant.agent.md). It interviews you for your tenant values and writes them into [`infra/parameters/lab.yaml`](infra/parameters/lab.yaml) and the identity-boundary statements.
+4. **Review the diff** the agent produced, then commit it on a branch.
+5. **Wire up identity.** Create the Microsoft Entra app + OIDC federated credential, set the GitHub Environment secrets, and set the `OWNER_APPROVAL_LOGIN` repository variable — see [Getting started §1–§2](docs/getting-started.md).
+6. **Validate and deploy.** Run `az bicep build` and the Pester suite, then the `deploy-infra` / `deploy-data-plane` workflows — see the [Tenant onboarding guide](docs/tenant-onboarding.md) and [Getting started §4](docs/getting-started.md).
+
+## Why two planes?
+
+Microsoft Purview does not expose a single "Purview-as-Code" product. A complete IaC repo must manage two independent planes, each with its own API surface and auth model:
+
+| Plane | What it manages | API | Auth | This repo |
+|---|---|---|---|---|
+| **Control plane** | The `Microsoft.Purview/accounts` resource, networking, managed identity, SKU | Azure Resource Manager | Azure RBAC (Contributor on RG) | [`infra/`](infra/) — Bicep |
+| **Data plane** | Sensitivity labels, DLP, data lifecycle and records management, insider risk, communication compliance, DSPM, plus Data Map collections, glossary, classifications, data sources, and scans | Microsoft Purview data-plane APIs (REST and Security & Compliance PowerShell) | App-only automation identity (certificate in Key Vault, OIDC from GitHub Actions) with least-privilege Microsoft Purview roles | [`data-plane/`](data-plane/) + [`scripts/`](scripts/) — YAML rendered by PowerShell |
+
+References:
+
+- [Microsoft.Purview/accounts resource (Bicep/ARM/Terraform)](https://learn.microsoft.com/en-us/azure/templates/microsoft.purview/accounts)
+- [Authenticate for Purview APIs](https://learn.microsoft.com/en-us/purview/data-gov-api-rest-data-plane)
+- [Purview Data Plane REST API reference](https://learn.microsoft.com/en-us/rest/api/purview/)
+- [Access control in Microsoft Purview](https://learn.microsoft.com/en-us/purview/data-gov-classic-permissions)
+- [Azure Verified Module — Purview Account](https://aka.ms/avm)
+
+## Repository layout
+
+```text
+.
+├── .github/
+│   ├── workflows/  # CI (validate) and CD (deploy-infra, deploy-data-plane)
+│   ├── instructions/  # Path-scoped Copilot rules (Bicep, PowerShell, YAML, ...)
+│   ├── prompts/  # Reusable /-invoked task templates
+│   └── agents/  # Workspace-scoped Squad agents (personas)
+├── infra/  # Bicep: Purview account + dependencies (control plane)
+│   ├── main.bicep
+│   ├── main.bicepparam
+│   ├── modules/
+│   └── parameters/
+├── data-plane/  # Desired-state governance content — one folder per Purview solution
+│   ├── information-protection/  # Sensitivity labels + label / auto-label policies
+│   ├── classifications/  # Sensitive information type (SIT) catalog
+│   ├── audit/
+│   ├── dlp/
+│   ├── data-lifecycle/
+│   ├── records/
+│   ├── irm/  # Insider Risk Management
+│   ├── communication-compliance/
+│   ├── dspm/
+│   ├── dspm-ai/
+│   ├── adaptive-scopes/
+│   ├── collections/  # Data Map collection hierarchy
+│   ├── glossary/
+│   ├── data-sources/
+│   ├── scans/
+│   ├── unified-catalog/
+│   ├── purview-role-groups/
+│   ├── entra-directory-roles/
+│   └── administrative-units/
+├── scripts/  # PowerShell 7+ reconcilers, smoke tests, provisioning helpers
+│   ├── Connect-Purview.ps1
+│   ├── Deploy-*.ps1  # Idempotent reconciler per data-plane solution
+│   ├── Invoke-*SmokeTest.ps1  # End-to-end lab smoke tests
+│   ├── New-*.ps1  # One-time identity / Key Vault / certificate provisioning
+│   └── modules/
+├── docs/
+│   ├── kickoff-guide.md  # Opinionated end-to-end kickoff walkthrough (start here)
+│   ├── tenant-onboarding.md  # Detailed step reference for standing up your environment
+│   ├── getting-started.md
+│   ├── architecture.md
+│   ├── project-plan.md  # v2 roadmap + progress checklist
+│   ├── adr/  # Architecture decision records
+│   ├── governance/
+│   ├── runbooks/
+│   ├── solutions/
+│   └── archive/  # Archived v1 plan
+├── tests/  # Pester 5.x unit tests for scripts/ (no live tenant)
+├── AGENTS.md
+└── README.md
+```
+
+## Deployment summary
+
+> For the full walkthrough from an empty copy to a deployed environment, see the [Kickoff guide](docs/kickoff-guide.md).
+
+1. **Prerequisites** — see [`docs/getting-started.md`](docs/getting-started.md).
+2. **Create the deployment service principal** and grant it the required Purview data plane roles (one-time) — see [Authenticate for APIs](https://learn.microsoft.com/en-us/purview/data-gov-api-rest-data-plane).
+3. **Configure GitHub secrets/variables**: `AZURE_CLIENT_ID`, `AZURE_TENANT_ID`, `AZURE_SUBSCRIPTION_ID`, `PURVIEW_ACCOUNT_NAME`.
+4. **Provision control plane**: push to `main`, the `deploy-infra` workflow runs `az deployment group create` against [`infra/main.bicep`](infra/main.bicep).
+5. **Deploy data plane**: `deploy-data-plane` workflow renders YAML under [`data-plane/`](data-plane/) into REST API calls.
+
+## Design principles
+
+- **Idempotent** — every apply script GETs current state, diffs, then PUT/PATCHes.
+- **Declarative YAML** — human-reviewable; pull request = change review.
+- **Least privilege** — OIDC federated credentials from GitHub → Entra; no long-lived secrets.
+- **Separation of concerns** — control-plane PRs never change catalog content and vice versa.
+
+## Status
+
+**Roadmap.** This template ships with an empty feature roadmap. New here? The [Kickoff guide](docs/kickoff-guide.md) walks you through standing up your environment end to end. See [`docs/project-plan.md`](docs/project-plan.md) to plan and track which Microsoft Purview features you adopt into as-code governance, and [`docs/getting-started.md`](docs/getting-started.md) to set up the tenant connection.
+
+Scheduled watch loops (drift, surface, and the planned code- and feature-currency loops) file their findings as review issues into a discoverable queue — see [`.github/copilot-automations/README.md`](.github/copilot-automations/README.md).
+
+  </script>
+  <script type="text/markdown" data-doc="docs/architecture.md">
+# Architecture
+
+## Two-plane model
+
+```mermaid
+flowchart LR
+    PR[Pull request] --> Validate[validate.yml<br/>Bicep lint · yamllint · PSScriptAnalyzer]
+    Validate -->|merge| Main[main branch]
+    Main -->|infra/** changed| Infra[deploy-infra.yml]
+    Main -->|data-plane/** or scripts/** changed| Data[deploy-data-plane.yml]
+
+    Infra -->|az deployment group create| ARM[(Azure Resource Manager)]
+    ARM -->|Microsoft.Purview/accounts| Account[Purview Account<br/>purview-contoso-lab]
+
+    Data -->|OIDC| Entra[(Entra ID)]
+    Entra -->|Bearer https://purview.azure.net| DP[Purview Data Plane APIs]
+    DP --> Collections
+    DP --> Glossary
+    DP --> Classifications
+    DP --> Sources[Data Sources]
+    DP --> Scans
+
+    subgraph Purview account
+        Account
+        Collections
+        Glossary
+        Classifications
+        Sources
+        Scans
+    end
+```
+
+## Why this shape
+
+- **Account name is identity.** The Purview account name is the DNS hostname of the data plane (`<name>.purview.azure.com`) and the name of the root collection. Renaming is effectively a rebuild; IaC treats it as a fixed input.
+- **Data plane is not in ARM.** Collections, glossary, classifications, sources, and scans are invisible to Bicep/Terraform. They live behind the Atlas v2 / Purview scan / Purview account REST APIs. That is why this repo ships PowerShell helpers driven by YAML manifests.
+- **OIDC > client secret.** The federated credential on the Entra app lets GitHub Actions obtain short-lived tokens for both `https://management.azure.com` (ARM) and `https://purview.azure.net` (data plane) with no stored secret.
+- **Idempotent upserts.** Each script resolves current state and issues PUTs. Deletes are deliberately opt-in to prevent a mis-merged PR from dropping production collections.
+
+## Endpoints & API versions
+
+| Concern | Endpoint | API version |
+|---|---|---|
+| Account / collections | `https://<acct>.purview.azure.com/account` | `2019-11-01-preview` |
+| Atlas (glossary, typedefs, entities) | `https://<acct>.purview.azure.com/datamap/api/atlas/v2` | Atlas v2 |
+| Scanning (sources, scans, rulesets) | `https://<acct>.purview.azure.com/scan` | `2022-02-01-preview` |
+
+> [!NOTE]
+> The DevOps / data-owner policies surface (`https://<acct>.purview.azure.com/policystore`, `2022-08-01-preview`) is **no longer managed by this repo**. Its reconciler was retired per [ADR 0038](adr/0038-devops-policies-reconciler-retirement.md) — the surface is in classic customer-support mode with documentation mirrored under `/purview/legacy/` and no GA `api-version`.
+
+References: [Purview REST API index](https://learn.microsoft.com/en-us/rest/api/purview/), [Microsoft.Purview/accounts Bicep](https://learn.microsoft.com/en-us/azure/templates/microsoft.purview/accounts).
+
+
+## Reference patterns adopted from `Azure-Deployment-Pipelines`
+
+The reference repo (`Azure-Deployment-Pipelines/Purview/`) ships three working solutions today: `Purview-AutoLabel-Policy`, `Bulk-Sensitivity-Label-Change-M365`, and `SIT-Confidence-Analysis` (sister repo; paths are workspace-local on the lab owner's machine, not navigable from this repo). Patterns worth porting, with this repo's translation:
+
+| Reference repo pattern | This repo's translation |
+|---|---|
+| `ExchangeOnlineManagement` v3.0+ with `Connect-IPPSSession` for Security & Compliance Center cmdlets | Same module, same cmdlet. Add `Connect-ComplianceCenter.ps1` helper alongside [`scripts/Connect-Purview.ps1`](../scripts/Connect-Purview.ps1). |
+| App-only cert-in-Key-Vault auth for unattended runs | Same pattern. Certificate issued into the existing lab Key Vault, federated to the GitHub Actions workload identity per [Use Azure Login with OpenID Connect](https://learn.microsoft.com/en-us/azure/developer/github/connect-from-azure-openid-connect). |
+| Three policy modes: `TestWithoutNotifications` → `TestWithNotifications` → `Enable` | Preserved verbatim in `data-plane/information-protection/auto-label-policies.yaml` as `mode:`. Default in new files is `TestWithoutNotifications`. |
+| Three confidence tiers: Low (≤65%) / Medium (66–84%) / High (85–100%) | Preserved. Encoded as `confidenceLevel:` on each SIT reference. See [Sensitive information type confidence levels](https://learn.microsoft.com/en-us/purview/sensitive-information-type-learn-about#more-information-on-confidence-levels). |
+| SIT identity by GUID (for example, `a44669fe-0d48-453d-a9b1-2cc83f2cba77` for U.S. SSN) | Preserved. GUIDs live in `data-plane/classifications/sit-catalog.yaml` with a human-readable `displayName:` beside each one. |
+| `params.json` per-solution config file | Translated to YAML (`solution.yaml` + `*.params.yaml`) to match [`.github/instructions/data-plane-yaml.instructions.md`](../.github/instructions/data-plane-yaml.instructions.md). JSON is not a first-class format here. |
+| Azure DevOps pipelines with service connections | Translated to GitHub Actions with OIDC federated credentials. Same outcome, different CI. |
+| Content Explorer CSV export as the confidence-analysis data source (not Data Explorer) | Preserved as guidance in the DSPM/analysis wave. |
+| Windows PowerShell 5.1 requirement for WAM | **Not adopted.** This repo mandates pwsh 7.4+ per [`.github/instructions/powershell.instructions.md`](../.github/instructions/powershell.instructions.md). Any cmdlet that truly requires 5.1 is called out in an ADR or avoided. |
+
+## Sensitivity label protection model
+
+Each encrypted sublabel in [`data-plane/information-protection/labels.yaml`](../data-plane/information-protection/labels.yaml) declares a `protectionType:` value (`Template`, `UserDefined`, or `RemoveProtection`). The choice is a deliberate security-posture trade-off; flipping it changes both the runtime behavior and the Microsoft Purview portal UX. The repo default is `UserDefined`.
+
+| `protectionType:` | Permissions source | UI "Assign permissions" editor | When to choose |
+|---|---|---|---|
+| `Template` | Permissions are baked into the label and applied identically every time the label is set. | Grayed out in the Purview portal — users and admins cannot adjust per-document permissions. | High-assurance scenarios where the permission set must be uniform, auditable, and immune to user error (regulated data, compliance-driven access controls). |
+| `UserDefined` | Permissions are chosen at apply time by the labeller (user or admin) within the bounds the label allows. | Available in the Purview portal — permissions can be set per document. | Day-to-day collaboration where the labeller needs flexibility (sharing specific files with named partners, ad-hoc external recipients). |
+| `RemoveProtection` | No encryption applied; any prior encryption is stripped. | Not applicable. | Down-classification flows and explicit "unprotect" sublabels. |
+
+Switching between `Template` and `UserDefined` is a YAML edit followed by a reconciler apply (`./scripts/Deploy-Labels.ps1`). It is reversible at any time. Re-evaluate the choice during any review that touches label scope, audience, or compliance posture. References: [Set-Label cmdlet](https://learn.microsoft.com/en-us/powershell/module/exchange/set-label), [Configure usage rights for Azure Information Protection](https://learn.microsoft.com/en-us/azure/information-protection/configure-usage-rights).
+
+### Applying label changes via CI
+
+Sensitivity labels are reconciled by the `Deploy sensitivity labels` step in the [`deploy-data-plane`](../.github/workflows/deploy-data-plane.yml) workflow. The workflow is manual-dispatch only (`workflow_dispatch`), and the labels step shares the same Key Vault firewall open/close window as the role-groups step so the vault returns to `publicNetworkAccess: Disabled` after every run.
+
+Dispatch procedure:
+
+1. Open the workflow in the GitHub Actions UI: **Actions → deploy-data-plane → Run workflow**.
+2. Choose inputs:
+   - `plan_labels_only: true` — runs `Deploy-Labels.ps1 -WhatIf`. No `Set-Label` calls; produces the plan table only. Use this first whenever the YAML has changed since the last apply.
+   - `plan_labels_only: false` (default) — runs `Deploy-Labels.ps1` for a live apply against the lab tenant.
+   - `prune_role_groups`: leave `false` unless the dispatch is specifically reconciling role-group drift; it does not affect labels.
+3. Confirm the run targets the `lab` environment and the `feat/...` or `main` ref you expect.
+4. After completion, inspect the `Deploy sensitivity labels` step log for the reconciler plan table and any `WARNING` rows (for example, the documented `autoApplicationOf` create-path gap).
+
+Who can dispatch: anyone with `write` access to the repo can dispatch, but the dispatch flows through the `lab` GitHub environment which is owner-gated. The data-plane workload identity (`gh-oidc-purview-data-plane`) is the principal that mutates labels; portal UI changes by humans require membership in `sg-purview-information-protection-admins`.
+
+  </script>
+  <script type="text/markdown" data-doc="docs/getting-started.md">
+# Getting started
+
+This guide wires the scaffolded repo to your existing `contoso-lab` Microsoft Purview account.
+
+## 1. One-time: deployment identity
+
+Create (or reuse) an Entra application that GitHub Actions will impersonate via OIDC federated credentials. Detailed steps: [Authenticate for APIs](https://learn.microsoft.com/en-us/purview/data-gov-api-rest-data-plane).
+
+```bash
+# Create the app + service principal
+az ad app create --display-name "gh-Purview-as-Code-Generic"
+APP_ID=$(az ad app list --display-name "gh-Purview-as-Code-Generic" --query "[0].appId" -o tsv)
+az ad sp create --id "$APP_ID"
+SP_OID=$(az ad sp show --id "$APP_ID" --query id -o tsv)
+
+# Add a GitHub OIDC federated credential (replace owner/repo/ref)
+az ad app federated-credential create --id "$APP_ID" --parameters '{
+  "name": "github-main",
+  "issuer": "https://token.actions.githubusercontent.com",
+  "subject": "repo:contoso/Purview-as-Code-Generic:ref:refs/heads/main",
+  "audiences": ["api://AzureADTokenExchange"]
+}'
+```
+
+Grant the service principal:
+
+1. **Azure RBAC** — `Contributor` on the target resource group (needed for `infra/` deployment).
+2. **Purview data plane roles** — assigned at the root collection of the Purview account:
+   - `Collection Admin` — required for account/metadata APIs, collection CRUD, role assignments.
+   - `Data Curator` — required for glossary, classification typedefs, lineage.
+   - `Data Source Administrator` — required for data source registration and scans.
+
+> [!NOTE]
+> `Policy Author` is **not** required. This repo does not author DevOps / data-owner policies — that reconciler was retired per [ADR 0038](adr/0038-devops-policies-reconciler-retirement.md).
+
+Assignment UI: Purview portal → Data Map → Collections → root → **Role assignments**. See [Access control in Microsoft Purview](https://learn.microsoft.com/en-us/purview/data-gov-classic-permissions).
+
+## 2. GitHub configuration
+
+Under **Settings → Secrets and variables → Actions**:
+
+- Secrets (Environment: `lab`):
+  - `AZURE_CLIENT_ID` = `$APP_ID`
+  - `AZURE_TENANT_ID`
+  - `AZURE_SUBSCRIPTION_ID`
+- Variables (Environment: `lab`):
+  - `PURVIEW_ACCOUNT_NAME` = `purview-contoso-lab` (or your actual account name)
+- Variables (Repository — not environment-scoped, because [`pr-auto-merge.yml`](../.github/workflows/pr-auto-merge.yml) runs without an `environment:`):
+  - `OWNER_APPROVAL_LOGIN` = your GitHub login (the lab owner). The auto-merge workflow only enables merge when the `owner-approved` label is applied by this login. Set under **Settings → Secrets and variables → Actions → Variables**. See [Store information in variables](https://docs.github.com/en/actions/how-tos/write-workflows/choose-what-workflows-do/use-variables).
+
+Create the `lab` environment (Settings → Environments → New environment → `lab`).
+
+## 3. Point at the existing Purview account
+
+The `contoso-lab` account already exists, so the control-plane deploy will reconcile its properties (idempotent). Before the first run:
+
+1. Edit [`infra/main.bicepparam`](../infra/main.bicepparam) so `purviewAccountName` and `location` match the existing account.
+2. Edit [`data-plane/collections/collections.yaml`](../data-plane/collections/collections.yaml) so `rootCollection` equals the existing account name (root collection shares the account name).
+
+## 4. First deploy
+
+```bash
+# Optional local dry run
+az login
+pwsh ./scripts/Deploy-Collections.ps1     -AccountName purview-contoso-lab -WhatIf
+pwsh ./scripts/Deploy-Glossary.ps1        -AccountName purview-contoso-lab -WhatIf
+pwsh ./scripts/Deploy-Classifications.ps1 -AccountName purview-contoso-lab -WhatIf
+```
+
+Then push to `main` — `deploy-infra` runs first, followed by `deploy-data-plane`.
+
+## 5. Day-2 workflow
+
+- All changes via pull request.
+- `validate` runs on every PR (Bicep lint, yamllint, PSScriptAnalyzer).
+- Merging to `main` triggers the deploy workflow for whichever plane changed.
+- Destructive operations (collection delete, glossary term delete) are gated behind explicit `-PruneMissing` flags that are deliberately not enabled in CI yet.
+
+## 6. Context handoffs between chat sessions
+
+Long iterations of [`/build-item`](../.github/prompts/build-item.prompt.md) can fill the Copilot Chat context window or span multiple work sessions. Two prompt files manage the handoff:
+
+- [`/prepare-handoff`](../.github/prompts/prepare-handoff.prompt.md) — run **at the end** of a chat session that needs to pause. It writes a single Markdown brief to `.copilot-tracking/handoff/<branch>-<timestamp>.md` describing what was validated, what's left, and which prompt to resume with. The `.copilot-tracking/` folder is gitignored, so the brief is local-only scratch and never lands in a PR.
+- [`/resume-from-handoff`](../.github/prompts/resume-from-handoff.prompt.md) — run **at the start** of a fresh chat session. It loads the most recent brief, re-runs branch and working-tree precondition checks, restates the next step, and routes back to `/build-item` (or `@artifact-resolver`, or an ADR draft) per the brief. After a successful hand-off the brief is deleted automatically — briefs are one-shot.
+
+When to use them: context window ≥ 80% full, more than ~30 tool calls accumulated in the session, topic shifting between planes, end of a work day, or handing off to another contributor. See [`.github/instructions/context-handoff.instructions.md`](../.github/instructions/context-handoff.instructions.md) for the full trigger list and the rules on what a brief MUST and MUST NOT contain (no secrets, no real identifiers, no tool-call transcripts).
+
+When **not** to use them: for "ask a quick side question", prefer VS Code's [`/fork`](https://code.visualstudio.com/docs/copilot/chat/chat-sessions#_fork-a-chat-session). For "this iteration went sideways, undo", use [chat checkpoints](https://code.visualstudio.com/docs/copilot/chat/chat-checkpoints). Handoffs are for *cross-session resume*, not undo or branching.
+
+  </script>
+  <script type="text/markdown" data-doc="docs/kickoff-guide.md">
+# Kickoff guide — stand up your own Purview-as-Code environment
+
+This is the **opinionated, end-to-end walkthrough** for turning this template into a running
+Purview-as-Code environment for *your* Microsoft Purview tenant. It orients you through the whole
+journey and points to the detailed references at each step:
+
+- [`docs/tenant-onboarding.md`](tenant-onboarding.md) — the exact step-by-step commands.
+- [`docs/getting-started.md`](getting-started.md) — the detailed identity, secrets, and deploy setup.
+- [`docs/architecture.md`](architecture.md) — the two-plane model and CI/CD flow.
+
+If you just want the command checklist, go straight to the
+[tenant onboarding guide](tenant-onboarding.md). Read on for the *why* behind each choice.
+
+## Who this is for
+
+You want your own version of this repository — managing one Microsoft Purview tenant as code —
+without any risk of your content flowing back into the source template. This guide assumes you can
+create an Entra app registration, deploy into an Azure resource group, and run VS Code with GitHub
+Copilot Chat (the custom agents are a VS Code feature).
+
+## The two planes (in one minute)
+
+Microsoft Purview has no single "Purview-as-Code" product, so this repo manages two independent
+planes — keep changes to one plane per pull request:
+
+- **Control plane** — the `Microsoft.Purview/accounts` resource and its Azure dependencies, as
+  Bicep under [`infra/`](../infra/). Deployed via Azure Resource Manager. See
+  [Microsoft.Purview/accounts](https://learn.microsoft.com/en-us/azure/templates/microsoft.purview/accounts).
+- **Data plane** — sensitivity labels, DLP, lifecycle, DSPM, Data Map collections, glossary,
+  classifications, sources, and scans, as YAML under [`data-plane/`](../data-plane/) rendered by
+  PowerShell reconcilers in [`scripts/`](../scripts/). Deployed via the Purview data-plane APIs. See
+  [Authenticate for Purview APIs](https://learn.microsoft.com/en-us/purview/data-gov-api-rest-data-plane).
+
+Full picture: [`docs/architecture.md`](architecture.md).
+
+## The journey
+
+### 1. Get a copy
+
+**Recommended: click "Use this template" on GitHub.** A template-generated repository starts with a
+clean history and *structurally cannot open a pull request back* to this source — the strongest form
+of the no-push-back boundary. See
+[Creating a repository from a template](https://docs.github.com/en/repositories/creating-and-managing-repositories/creating-a-repository-from-a-template).
+
+Prefer a local-only workspace instead? `git clone` it and pick the local-workspace mode in the next
+step.
+
+### 2. Decouple with the Kickoff agent
+
+Open the copy in VS Code, start Copilot Chat, and run [`@operator-kickoff`](../.github/agents/operator-kickoff.agent.md).
+It offers two modes and installs the **no-push-back guard**, then verifies it, per
+[ADR 0045](adr/0045-template-kickoff-spinoff-model.md):
+
+- **Local workspace** — removes the source `origin` and resets history for a clean break.
+- **Spin-off GitHub repository** — your own repo (preferring "Use this template"); it resolves the
+  true source via the GitHub template relationship, never your own `origin`.
+
+If you used "Use this template", GitHub already decoupled you — the agent then installs only the
+optional local `pre-push` backstop.
+
+### 3. Tailor for your tenant
+
+Run [`@operator-tenant`](../.github/agents/operator-tenant.agent.md). It interviews you one question
+at a time and writes your values into [`infra/parameters/lab.yaml`](../infra/parameters/lab.yaml) and
+the identity-boundary statements — **never** a secret or real subscription/tenant/object ID. Review
+the diff and commit it on a branch.
+
+### 4. Wire up identity and secrets
+
+Authenticate GitHub Actions to Azure with a Microsoft Entra app + OIDC federated credential — no
+stored client secret. Set the environment secrets (`AZURE_CLIENT_ID`, `AZURE_TENANT_ID`,
+`AZURE_SUBSCRIPTION_ID`), the `PURVIEW_ACCOUNT_NAME` variable, and the `OWNER_APPROVAL_LOGIN`
+repository variable (your GitHub login — the auto-merge gate reads it). Exact commands:
+[Getting started §1–§2](getting-started.md). Grounding:
+[Use Azure Login with OpenID Connect](https://learn.microsoft.com/en-us/azure/developer/github/connect-from-azure-openid-connect),
+[Store information in variables](https://docs.github.com/en/actions/how-tos/write-workflows/choose-what-workflows-do/use-variables).
+
+Grant the deploy identity least-privilege roles: **Contributor** on your resource group (control
+plane) and the Microsoft Purview roles **Collection Admin**, **Data Curator**, and
+**Data Source Administrator** at the root collection (data plane). See
+[Access control in Microsoft Purview](https://learn.microsoft.com/en-us/purview/data-gov-classic-permissions).
+
+### 5. Validate, then deploy
+
+Run `az bicep build --file infra/main.bicep` and `pwsh -File tests/Run-Pester.ps1` locally; both must
+pass. Then run the `deploy-infra` and `deploy-data-plane` workflows. Exact steps:
+[tenant onboarding §6–§7](tenant-onboarding.md) and [Getting started §4](getting-started.md).
+
+### 6. Adopt features, one at a time
+
+Your environment is now live but the feature roadmap ships empty. From here, all work is
+**agent-led** and runs one item at a time:
+
+`@idea-intake` → `@artifact-resolver` → `@owner-approval`
+
+Populate [`docs/project-plan.md`](project-plan.md) as you bring each Microsoft Purview feature into
+as-code governance. See [`.github/agents/README.md`](../.github/agents/README.md) for the full agent
+index and [ADR 0014](adr/0014-agents-as-default-entry-point.md) for why the agents are the default
+entry point.
+
+## Guardrails you inherit
+
+- **No push-back to the source template.** The kickoff guard (origin severance, disabled upstream
+  push URL, `pre-push` hook, agent refusal) plus the template repository setting make it structurally
+  hard for your copy to contribute content back. See [ADR 0045](adr/0045-template-kickoff-spinoff-model.md).
+- **No secrets, no real identifiers in source.** Real tenant/subscription/object IDs and the owner
+  login live in GitHub secrets/variables, never in committed files.
+- **Least privilege and OIDC everywhere.** No long-lived client secrets in CI.
+
+## References
+
+- **[Creating a repository from a template](https://docs.github.com/en/repositories/creating-and-managing-repositories/creating-a-repository-from-a-template)**
+  Fetch date: 2026-07-03
+  > "a repository created from a template starts with a single commit."
+- **[Microsoft.Purview/accounts (Bicep/ARM)](https://learn.microsoft.com/en-us/azure/templates/microsoft.purview/accounts)** — control-plane resource.
+- **[Authenticate for Purview APIs](https://learn.microsoft.com/en-us/purview/data-gov-api-rest-data-plane)** — data-plane auth.
+- **[Access control in Microsoft Purview](https://learn.microsoft.com/en-us/purview/data-gov-classic-permissions)** — least-privilege roles.
+- **[Use Azure Login with OpenID Connect](https://learn.microsoft.com/en-us/azure/developer/github/connect-from-azure-openid-connect)** — OIDC for CI/CD.
+- [Tenant onboarding guide](tenant-onboarding.md) · [Getting started](getting-started.md) · [Architecture](architecture.md) · [ADR 0045](adr/0045-template-kickoff-spinoff-model.md)
+
+  </script>
+  <script type="text/markdown" data-doc="docs/tenant-onboarding.md">
+# Tenant onboarding
+
+This guide takes a fresh clone of the **Purview-as-Code generic template** from zero to a
+tailored, deployable repository for **your** Microsoft Purview tenant. It orchestrates the
+clone → decouple → tailor → wire-up → deploy flow and hands off to [Getting started](getting-started.md)
+for the detailed identity setup.
+
+> Prefer a narrative overview first? See the [Kickoff guide](kickoff-guide.md) — this page is the
+> detailed step reference it links to.
+
+> This template ships tenant-neutral. Every tenant-specific value is a Microsoft-documented
+> placeholder (`contoso`, `contoso.onmicrosoft.com`, zero-GUID). It will **not** deploy against
+> a real tenant until you complete Step 3.
+
+## Prerequisites
+
+- An **Azure subscription** and a **resource group** you can deploy into (the deploy identity is
+  Contributor-scoped to that group; it must already exist).
+- A **Microsoft Entra tenant** where you can create an app registration and (optionally) security
+  groups.
+- A **Microsoft Purview account** (existing, or one you will create via `infra/`).
+- A **GitHub repository** created from this template (see Step 1).
+- **VS Code** with **GitHub Copilot Chat** (custom agents are a VS Code feature, per
+  [Custom agents in VS Code](https://code.visualstudio.com/docs/copilot/customization/custom-chat-modes)).
+- Local tooling for validation: **Azure CLI** (`az`, includes Bicep), **PowerShell 7.4+**, and
+  **Pester 5.x** (the test runner installs it if missing).
+
+## Step 1 — Get a copy of the template
+
+Use either path:
+
+- **GitHub UI (recommended for a spin-off repo):** click **Use this template → Create a new
+  repository**. A template-generated repository starts from a single commit with unrelated
+  history, so it cannot open a pull request back to the source template. See
+  [Creating a repository from a template](https://docs.github.com/en/repositories/creating-and-managing-repositories/creating-a-repository-from-a-template).
+- **Command line (for a local workspace):**
+
+  ```bash
+  git clone https://github.com/<your-org>/<your-repo>.git
+  cd <your-repo>
+  ```
+
+## Step 2 — Decouple your copy with the Kickoff agent
+
+Sever your copy from the source template so it can never contribute content back, per
+[ADR 0045](adr/0045-template-kickoff-spinoff-model.md).
+
+- If you used **Use this template** (Step 1), GitHub already decoupled you: a template-generated
+  repository has unrelated history and cannot open a pull request back to the source. You can skip
+  to Step 3. (If you run `@operator-kickoff` here anyway, it resolves the true source via the
+  GitHub template relationship, not `origin`, and installs only the optional pre-push backstop.)
+- If you **cloned** the template, open the repo in VS Code, start Copilot Chat, and run the
+  **Kickoff** agent:
+
+  ```text
+  @operator-kickoff
+  ```
+
+  The agent ([`.github/agents/operator-kickoff.agent.md`](../.github/agents/operator-kickoff.agent.md))
+  offers **Local workspace** (removes the source `origin` and resets history) or **Spin-off GitHub
+  repository** (creates your own repo and repoints `origin`), installs the no-push-back guard
+  ([`scripts/Set-KickoffGuard.ps1`](../scripts/Set-KickoffGuard.ps1)), verifies it
+  ([`scripts/Test-KickoffGuard.ps1`](../scripts/Test-KickoffGuard.ps1)), then hands off to the
+  Tenant Intake agent.
+
+## Step 3 — Tailor the copy with the Tenant Intake agent
+
+Create a working branch so the tailoring lands as a reviewable diff:
+
+```bash
+git checkout -b chore/tenant-intake
+```
+
+Open the repo in VS Code, start Copilot Chat, and invoke the **Tenant Intake** agent:
+
+```text
+@operator-tenant
+```
+
+The agent ([`.github/agents/operator-tenant.agent.md`](../.github/agents/operator-tenant.agent.md))
+interviews you for your tenant values one question at a time, then — only after you confirm — writes
+them into:
+
+- [`infra/parameters/lab.yaml`](../infra/parameters/lab.yaml) — the single source of truth for
+  environment, region, resource group, Purview account, Key Vault, Log Analytics, tenant domain,
+  and the OIDC app display names. Per
+  [Bicep parameter files](https://learn.microsoft.com/en-us/azure/azure-resource-manager/bicep/parameter-files).
+- [`infra/main.bicepparam`](../infra/main.bicepparam) — the control-plane parameters.
+- The **identity-boundary statements** in
+  [`.github/copilot-instructions.md`](../.github/copilot-instructions.md), `README.md`,
+  [`.github/CODEOWNERS`](../.github/CODEOWNERS), and the naming instructions.
+
+What the agent **never** does: store a secret or real subscription/tenant/object ID in any file,
+and never deploy. Subscription and tenant IDs belong in GitHub secrets, not in source (Step 5).
+
+> Prefer to edit by hand? Open [`infra/parameters/lab.yaml`](../infra/parameters/lab.yaml) and
+> replace the values in the `TEMPLATE — replace the placeholder values below` header block.
+
+## Step 4 — Review the tailoring diff
+
+```bash
+git --no-pager diff
+```
+
+Confirm the placeholders are gone and replaced with your values. A quick scan for any leftover
+placeholder:
+
+```bash
+git --no-pager grep -nEi 'contoso|onmicrosoft\.com|OWNER-PLACEHOLDER' -- ':!docs/adr' ':!CHANGELOG.md'
+```
+
+Commit when satisfied:
+
+```bash
+git add -A && git commit -m "chore(repo): tailor template for <your-tenant>"
+```
+
+## Step 5 — Wire up the deployment identity and secrets
+
+The repository authenticates to Azure from GitHub Actions using a **Microsoft Entra app + OIDC
+federated credential** — no stored client secret. Per
+[Authenticate to Azure from GitHub Actions by OpenID Connect](https://learn.microsoft.com/en-us/azure/developer/github/connect-from-azure-openid-connect).
+
+Follow [Getting started §1–§2](getting-started.md) for the exact `az ad app` commands. In short:
+
+1. Create the Entra app + service principal and add a federated credential whose subject is
+   `repo:<your-org>/<your-repo>:environment:<env>`.
+2. Grant it **Contributor** on your resource group (control plane) and the Microsoft Purview
+   data-plane roles **Collection Admin**, **Data Curator**, and **Data Source Administrator** at the
+   root collection — per
+   [Access control in Microsoft Purview](https://learn.microsoft.com/en-us/purview/data-gov-classic-permissions).
+3. In **Settings → Environments → `<env>`**, set secrets `AZURE_CLIENT_ID`, `AZURE_TENANT_ID`,
+   `AZURE_SUBSCRIPTION_ID` and variable `PURVIEW_ACCOUNT_NAME`.
+4. In **Settings → Secrets and variables → Actions → Variables**, set the repository variable
+   `OWNER_APPROVAL_LOGIN` to your GitHub login. The
+   [`pr-auto-merge.yml`](../.github/workflows/pr-auto-merge.yml) workflow only enables auto-merge
+   when the `owner-approved` label is applied by this login; if it is unset, auto-merge fails with a
+   configuration error. It is a repository variable (not environment-scoped) because that workflow
+   runs without an `environment:`. See
+   [Store information in variables](https://docs.github.com/en/actions/how-tos/write-workflows/choose-what-workflows-do/use-variables).
+
+> Never commit any of these values. They live only in GitHub secrets and in your local
+> `az account set` context.
+
+## Step 6 — Validate locally
+
+```bash
+# Control plane compiles
+az bicep build --file infra/main.bicep
+
+# Unit tests (no live tenant required)
+pwsh -File tests/Run-Pester.ps1
+```
+
+Both must pass before you deploy.
+
+## Step 7 — First deploy
+
+Run the workflows from the **Actions** tab (or follow [Getting started §4](getting-started.md)):
+
+1. **`deploy-infra`** — provisions / reconciles the `Microsoft.Purview/accounts` resource and its
+   dependencies. See [Microsoft.Purview/accounts (Bicep)](https://learn.microsoft.com/en-us/azure/templates/microsoft.purview/accounts).
+2. **`deploy-data-plane`** — applies the desired-state catalog content under `data-plane/`.
+
+After the first deploy, the ongoing per-feature lifecycle is agent-led
+(`@idea-intake` → `@artifact-resolver` → `@owner-approval`); populate
+[`docs/project-plan.md`](project-plan.md) as you adopt features.
+
+## References
+
+- **[Authenticate to Azure from GitHub Actions by OpenID Connect](https://learn.microsoft.com/en-us/azure/developer/github/connect-from-azure-openid-connect)**
+  Fetch date: 2026-06-21
+  > "Securely authenticate to Azure services from GitHub Actions workflows using Azure Login action with OpenID Connect (OIDC)."
+- **[Access control in the classic Microsoft Purview governance portal](https://learn.microsoft.com/en-us/purview/data-gov-classic-permissions)**
+  Fetch date: 2026-06-21
+  > "The Microsoft Purview governance portal uses Collections in the Microsoft Purview Data Map to organize and manage access across its sources, assets, and other artifacts."
+- [Creating a repository from a template](https://docs.github.com/en/repositories/creating-and-managing-repositories/creating-a-repository-from-a-template)
+- [Bicep parameter files](https://learn.microsoft.com/en-us/azure/azure-resource-manager/bicep/parameter-files)
+- [Microsoft.Purview/accounts (Bicep)](https://learn.microsoft.com/en-us/azure/templates/microsoft.purview/accounts)
+- [Custom agents in VS Code](https://code.visualstudio.com/docs/copilot/customization/custom-chat-modes)
+- [Getting started](getting-started.md) — detailed identity, secrets, and deploy walkthrough.
+
+  </script>
+  <!-- EMBEDDED-DOCS:END -->
+
+  <!-- ============ Slide-in document reader ============ -->
+  <div class="doc-overlay" id="docOverlay"></div>
+  <aside class="doc-panel" id="docPanel" role="dialog" aria-modal="true" aria-label="Document reader">
+    <div class="doc-head">
+      <div style="flex:1; min-width:0;">
+        <div class="doc-title" id="docTitle">Document</div>
+        <div class="doc-path" id="docPath"></div>
+      </div>
+      <a class="doc-raw" id="docRaw" href="#" target="_blank" rel="noopener">Open full file ↗</a>
+      <button class="doc-close" id="docClose" aria-label="Close reader">×</button>
+    </div>
+    <div class="doc-body" id="docBody"></div>
+  </aside>
+
+  <script>
+  (function () {
+    "use strict";
+
+    var overlay = document.getElementById("docOverlay");
+    var panel   = document.getElementById("docPanel");
+    var bodyEl  = document.getElementById("docBody");
+    var titleEl = document.getElementById("docTitle");
+    var pathEl  = document.getElementById("docPath");
+    var rawEl   = document.getElementById("docRaw");
+    var closeEl = document.getElementById("docClose");
+    var currentDocUrl = null;
+
+    function escapeHtml(s) {
+      return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+    }
+    function slugify(s) {
+      return s.toLowerCase().replace(/<[^>]+>/g, "").replace(/[^\w\s-]/g, "").trim().replace(/\s+/g, "-");
+    }
+    function renderLink(txt, href) {
+      if (/^(https?:|mailto:)/i.test(href)) {
+        return '<a href="' + href + '" target="_blank" rel="noopener">' + txt + "</a>";
+      }
+      return '<a href="' + href + '">' + txt + "</a>";
+    }
+    function inlineMd(text) {
+      var codes = [];
+      text = text.replace(/`([^`]+)`/g, function (m, c) { codes.push(c); return "\uE011" + (codes.length - 1) + "\uE011"; });
+      text = escapeHtml(text);
+      text = text.replace(/!\[([^\]]*)\]\(([^)\s]+)(?:\s+"[^"]*")?\)/g, function (m, alt, src) { return '<img src="' + src + '" alt="' + alt + '">'; });
+      text = text.replace(/\[([^\]]+)\]\(([^)\s]+)(?:\s+"[^"]*")?\)/g, function (m, t, h) { return renderLink(t, h); });
+      text = text.replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>").replace(/__([^_]+)__/g, "<strong>$1</strong>");
+      text = text.replace(/(^|[^*])\*([^*\n]+)\*/g, "$1<em>$2</em>");
+      text = text.replace(/(^|[^_\w])_([^_\n]+)_(?!\w)/g, "$1<em>$2</em>");
+      text = text.replace(/~~([^~]+)~~/g, "<del>$1</del>");
+      text = text.replace(/\uE011(\d+)\uE011/g, function (m, i) { return "<code>" + escapeHtml(codes[+i]) + "</code>"; });
+      return text;
+    }
+    function renderList(items, ordered) {
+      var tag = ordered ? "ol" : "ul", out = "<" + tag + ">";
+      for (var k = 0; k < items.length; k++) {
+        var it = items[k], nested = [];
+        while (k + 1 < items.length && items[k + 1].indent > it.indent) { nested.push(items[k + 1]); k++; }
+        var inner = inlineMd(it.text.split("\n").join(" "));
+        out += nested.length ? "<li>" + inner + renderList(nested, nested[0].ordered) + "</li>" : "<li>" + inner + "</li>";
+      }
+      return out + "</" + tag + ">";
+    }
+    function isTableStart(lines, i) {
+      return i + 1 < lines.length && lines[i].indexOf("|") >= 0 &&
+        /^\s*\|?[\s:|-]+\|?\s*$/.test(lines[i + 1]) && lines[i + 1].indexOf("-") >= 0;
+    }
+    function md2html(md) {
+      md = md.replace(/\r\n?/g, "\n");
+      var blocks = [];
+      md = md.replace(/```([^\n]*)\n([\s\S]*?)```/g, function (m, lang, code) {
+        blocks.push(code.replace(/\n$/, "")); return "\n\uE000" + (blocks.length - 1) + "\uE000\n";
+      });
+      md = md.replace(/<!--[\s\S]*?-->/g, "");
+      var lines = md.split("\n"), html = "", i = 0;
+      var isBlank = function (l) { return /^\s*$/.test(l); };
+      while (i < lines.length) {
+        var line = lines[i], m;
+        if ((m = line.match(/^\uE000(\d+)\uE000$/))) { html += '<pre class="cb"><code>' + escapeHtml(blocks[+m[1]]) + "</code></pre>"; i++; continue; }
+        if (isBlank(line)) { i++; continue; }
+        if ((m = line.match(/^(#{1,6})\s+(.*?)\s*#*\s*$/))) { var lv = m[1].length; html += "<h" + lv + ' id="' + slugify(m[2]) + '">' + inlineMd(m[2]) + "</h" + lv + ">"; i++; continue; }
+        if (/^\s*([-*_])\1{2,}\s*$/.test(line)) { html += "<hr>"; i++; continue; }
+        if (isTableStart(lines, i)) {
+          var row = function (l) { return l.trim().replace(/^\|/, "").replace(/\|$/, "").split("|").map(function (c) { return c.trim(); }); };
+          var headers = row(line); i += 2; var rows = [];
+          while (i < lines.length && lines[i].indexOf("|") >= 0 && !isBlank(lines[i])) { rows.push(row(lines[i])); i++; }
+          var t = "<table><thead><tr>" + headers.map(function (c) { return "<th>" + inlineMd(c) + "</th>"; }).join("") + "</tr></thead><tbody>";
+          rows.forEach(function (r) { t += "<tr>" + r.map(function (c) { return "<td>" + inlineMd(c) + "</td>"; }).join("") + "</tr>"; });
+          html += t + "</tbody></table>"; continue;
+        }
+        if (/^\s*>/.test(line)) {
+          var buf = [];
+          while (i < lines.length && /^\s*>/.test(lines[i])) { buf.push(lines[i].replace(/^\s*>\s?/, "")); i++; }
+          var inner = buf.join("\n"), cls = "", label = "";
+          var al = inner.match(/^\s*\[!(NOTE|TIP|IMPORTANT|WARNING|CAUTION)\]\s*\n?/i);
+          if (al) {
+            var kind = al[1].toUpperCase(); inner = inner.slice(al[0].length);
+            cls = " alert-" + (kind === "WARNING" || kind === "CAUTION" ? "warning" : kind === "IMPORTANT" ? "important" : "note");
+            label = '<span class="alert-label">' + kind + "</span>";
+          }
+          html += '<blockquote class="' + cls.trim() + '">' + label + md2html(inner) + "</blockquote>"; continue;
+        }
+        if ((m = line.match(/^(\s*)([-*+]|\d+\.)\s+(.*)$/))) {
+          var items = [];
+          while (i < lines.length) {
+            var mm = lines[i].match(/^(\s*)([-*+]|\d+\.)\s+(.*)$/);
+            if (mm) { items.push({ indent: mm[1].length, ordered: /\d+\./.test(mm[2]), text: mm[3] }); i++; }
+            else if (!isBlank(lines[i]) && /^\s+\S/.test(lines[i])) { items[items.length - 1].text += "\n" + lines[i].trim(); i++; }
+            else break;
+          }
+          html += renderList(items, items[0].ordered); continue;
+        }
+        var pbuf = [];
+        while (i < lines.length && !isBlank(lines[i]) && !/^(#{1,6})\s/.test(lines[i]) && !/^\s*>/.test(lines[i]) &&
+               !/^\uE000\d+\uE000$/.test(lines[i]) && !/^\s*([-*+]|\d+\.)\s+/.test(lines[i]) &&
+               !/^\s*([-*_])\1{2,}\s*$/.test(lines[i]) && !isTableStart(lines, i)) { pbuf.push(lines[i]); i++; }
+        if (pbuf.length) { html += "<p>" + inlineMd(pbuf.join("\n")) + "</p>"; } else { i++; }
+      }
+      return html;
+    }
+
+    function shortPath(u) {
+      try { var url = new URL(u), p = url.pathname, base = new URL(".", document.baseURI).pathname;
+        if (p.indexOf(base) === 0) p = p.slice(base.length); return decodeURIComponent(p); }
+      catch (e) { return u; }
+    }
+    function openPanel() { overlay.classList.add("open"); panel.classList.add("open"); document.body.classList.add("doc-open"); }
+    function closePanel() { overlay.classList.remove("open"); panel.classList.remove("open"); document.body.classList.remove("doc-open"); }
+
+    function renderMarkdown(text, hash) {
+      bodyEl.innerHTML = md2html(text);
+      var h1 = bodyEl.querySelector("h1"); if (h1) titleEl.textContent = h1.textContent;
+      bodyEl.scrollTop = 0;
+      if (hash) { var el = bodyEl.querySelector("#" + (window.CSS && CSS.escape ? CSS.escape(hash) : hash)); if (el) el.scrollIntoView(); }
+    }
+    function embeddedDoc(url) {
+      var node = document.querySelector('script[type="text/markdown"][data-doc="' + shortPath(url) + '"]');
+      return node ? node.textContent : null;
+    }
+    function showFallback() {
+      bodyEl.innerHTML =
+        '<div class="doc-error"><p><strong>Couldn’t load this document.</strong></p>' +
+        "<p>No offline copy is embedded for this file. The live reader works when the page is served over HTTP " +
+        '— for example via <em>GitHub Pages</em>, or a local preview such as VS Code “Live Preview” or ' +
+        "<code>python -m http.server</code>.</p>" +
+        '<a class="btn btn-primary" href="' + currentDocUrl + '" target="_blank" rel="noopener">Open the file directly ↗</a></div>';
+    }
+    function loadDoc(absUrl, title) {
+      openPanel();
+      currentDocUrl = absUrl.split("#")[0];
+      var hash = absUrl.split("#")[1];
+      titleEl.textContent = title || "Document";
+      pathEl.textContent = shortPath(currentDocUrl);
+      rawEl.href = currentDocUrl;
+      bodyEl.innerHTML = '<div class="doc-loading"><span class="doc-spinner"></span>Loading ' + escapeHtml(shortPath(currentDocUrl)) + "…</div>";
+      bodyEl.scrollTop = 0;
+      // Prefer the live file when served over HTTP so a published site stays fresh;
+      // fall back to the embedded offline snapshot when fetch is blocked (file://).
+      fetch(currentDocUrl).then(function (res) {
+        if (!res.ok) throw new Error("HTTP " + res.status);
+        return res.text();
+      }).then(function (text) {
+        renderMarkdown(text, hash);
+      }).catch(function () {
+        var emb = embeddedDoc(currentDocUrl);
+        if (emb !== null) { renderMarkdown(emb, hash); }
+        else { showFallback(); }
+      });
+    }
+
+    document.addEventListener("click", function (e) {
+      var a = e.target.closest ? e.target.closest("a") : null;
+      if (!a) return;
+      var raw = a.getAttribute("href");
+      if (!raw) return;
+      var inPanel = panel.contains(a);
+      if (inPanel && raw.charAt(0) === "#") {
+        var el = bodyEl.querySelector("#" + (window.CSS && CSS.escape ? CSS.escape(raw.slice(1)) : raw.slice(1)));
+        if (el) { e.preventDefault(); el.scrollIntoView(); }
+        return;
+      }
+      if (/^(https?:|mailto:)/i.test(raw) || raw.charAt(0) === "#") return;
+      var abs;
+      try { abs = new URL(raw, inPanel ? currentDocUrl : document.baseURI); } catch (_) { return; }
+      if (abs.pathname.toLowerCase().split("?")[0].split("#")[0].slice(-3) === ".md") {
+        e.preventDefault();
+        loadDoc(abs.href, a.textContent.trim());
+      }
+    });
+
+    closeEl.addEventListener("click", closePanel);
+    overlay.addEventListener("click", closePanel);
+    document.addEventListener("keydown", function (e) { if (e.key === "Escape") closePanel(); });
+  })();
+  </script>
+
+</body>
+</html>
