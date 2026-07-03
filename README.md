@@ -14,6 +14,8 @@
 
 Declarative, version-controlled configuration of a Microsoft Purview environment for a single tenant. Both the Azure resource (control plane) and the catalog contents (data plane) are expressed as code and deployed by GitHub Actions.
 
+> **Standing up your own environment? Start with the [Kickoff guide](docs/kickoff-guide.md)** — the opinionated end-to-end walkthrough from an empty copy to a deployed, tenant-tailored environment.
+
 > **Template repository.** This repo is enabled as a [GitHub template](https://docs.github.com/en/repositories/creating-and-managing-repositories/creating-a-repository-from-a-template) — click **Use this template** to create your own copy. A template-generated repo starts with a clean history and cannot open a pull request back to this source, which is the preferred spin-off path in [ADR 0045](docs/adr/0045-template-kickoff-spinoff-model.md).
 
 > **Target account (placeholder):** `contoso-lab` Microsoft Purview account (tenant `contoso.onmicrosoft.com`).
@@ -104,7 +106,9 @@ References:
 └── README.md
 ```
 
-## Quick start
+## Deployment summary
+
+> For the full walkthrough from an empty copy to a deployed environment, see the [Kickoff guide](docs/kickoff-guide.md).
 
 1. **Prerequisites** — see [`docs/getting-started.md`](docs/getting-started.md).
 2. **Create the deployment service principal** and grant it the required Purview data plane roles (one-time) — see [Authenticate for APIs](https://learn.microsoft.com/en-us/purview/data-gov-api-rest-data-plane).
@@ -121,6 +125,6 @@ References:
 
 ## Status
 
-**Roadmap.** This template ships with an empty feature roadmap. See [`docs/project-plan.md`](docs/project-plan.md) to plan and track which Microsoft Purview features you adopt into as-code governance, and [`docs/getting-started.md`](docs/getting-started.md) to set up the tenant connection.
+**Roadmap.** This template ships with an empty feature roadmap. New here? The [Kickoff guide](docs/kickoff-guide.md) walks you through standing up your environment end to end. See [`docs/project-plan.md`](docs/project-plan.md) to plan and track which Microsoft Purview features you adopt into as-code governance, and [`docs/getting-started.md`](docs/getting-started.md) to set up the tenant connection.
 
 Scheduled watch loops (drift, surface, and the planned code- and feature-currency loops) file their findings as review issues into a discoverable queue — see [`.github/copilot-automations/README.md`](.github/copilot-automations/README.md).
