@@ -223,6 +223,86 @@
     footer .foot-inner { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 14px; }
     footer a { color: var(--muted); }
     footer a:hover { color: var(--text); }
+
+    /* ---------- Doc side panel (slide-in reader) ---------- */
+    .doc-overlay {
+      position: fixed; inset: 0; z-index: 90;
+      background: rgba(6,7,18,.6); backdrop-filter: blur(2px);
+      opacity: 0; visibility: hidden; transition: opacity .25s ease, visibility .25s ease;
+    }
+    .doc-overlay.open { opacity: 1; visibility: visible; }
+
+    .doc-panel {
+      position: fixed; top: 0; right: 0; z-index: 100;
+      height: 100vh; width: min(720px, 94vw);
+      background: var(--bg-soft); border-left: 1px solid var(--border);
+      box-shadow: -20px 0 60px rgba(0,0,0,.5);
+      transform: translateX(100%); transition: transform .3s cubic-bezier(.22,.61,.36,1);
+      display: flex; flex-direction: column;
+    }
+    .doc-panel.open { transform: translateX(0); }
+
+    .doc-head {
+      flex: none; display: flex; align-items: center; gap: 12px;
+      padding: 16px 20px; border-bottom: 1px solid var(--border);
+      background: rgba(29,31,61,.7); backdrop-filter: blur(8px);
+    }
+    .doc-head .doc-title { font-weight: 700; font-size: 15px; flex: 1; min-width: 0;
+      white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .doc-head .doc-path { font-size: 12px; color: var(--muted); font-family: "Cascadia Code","Consolas",ui-monospace,monospace; }
+    .doc-head a.doc-raw { font-size: 12.5px; color: var(--accent-2); white-space: nowrap; }
+    .doc-head button.doc-close {
+      flex: none; width: 34px; height: 34px; border-radius: 9px; cursor: pointer;
+      background: var(--surface-2); border: 1px solid var(--border); color: var(--text);
+      font-size: 18px; line-height: 1; display: grid; place-items: center;
+    }
+    .doc-head button.doc-close:hover { border-color: var(--accent-2); color: var(--accent-2); }
+
+    .doc-body { flex: 1; overflow-y: auto; padding: 28px 34px 60px; scroll-behavior: smooth; }
+    .doc-loading, .doc-error { color: var(--muted); font-size: 15px; padding: 20px 0; }
+    .doc-error strong { color: var(--text); }
+    .doc-error .btn { margin-top: 14px; }
+    .doc-spinner {
+      width: 20px; height: 20px; border-radius: 50%; display: inline-block; vertical-align: -4px; margin-right: 10px;
+      border: 2px solid var(--border); border-top-color: var(--accent-2); animation: spin .8s linear infinite;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+
+    /* rendered markdown */
+    .doc-body h1, .doc-body h2, .doc-body h3, .doc-body h4 { line-height: 1.25; letter-spacing: -.2px; scroll-margin-top: 12px; }
+    .doc-body h1 { font-size: 27px; margin: 4px 0 18px; }
+    .doc-body h2 { font-size: 21px; margin: 30px 0 12px; padding-bottom: 8px; border-bottom: 1px solid var(--border); }
+    .doc-body h3 { font-size: 17px; margin: 24px 0 10px; }
+    .doc-body h4 { font-size: 15px; margin: 20px 0 8px; color: var(--muted); }
+    .doc-body p { color: var(--text); font-size: 15px; margin: 0 0 14px; }
+    .doc-body a { color: var(--accent-2); }
+    .doc-body ul, .doc-body ol { margin: 0 0 16px; padding-left: 24px; }
+    .doc-body li { margin: 5px 0; color: var(--text); font-size: 15px; }
+    .doc-body code {
+      background: var(--code-bg); border: 1px solid var(--border); border-radius: 5px;
+      padding: 1px 6px; font-size: 13px; color: #d9d6ff;
+      font-family: "Cascadia Code","Consolas",ui-monospace,monospace;
+    }
+    .doc-body pre.cb {
+      background: var(--code-bg); border: 1px solid var(--border); border-radius: 10px;
+      padding: 16px 18px; overflow-x: auto; margin: 0 0 16px;
+    }
+    .doc-body pre.cb code { background: none; border: none; padding: 0; font-size: 12.5px; color: #cdd0f5; line-height: 1.6; display: block; }
+    .doc-body blockquote {
+      margin: 0 0 16px; padding: 10px 16px; border-left: 3px solid var(--accent);
+      background: rgba(123,97,255,.08); border-radius: 0 8px 8px 0; color: var(--muted);
+    }
+    .doc-body blockquote.alert-note { border-left-color: var(--accent-2); background: rgba(41,200,200,.08); }
+    .doc-body blockquote.alert-warning { border-left-color: var(--accent-3); background: rgba(255,176,32,.09); }
+    .doc-body blockquote.alert-important { border-left-color: var(--accent); background: rgba(123,97,255,.1); }
+    .doc-body blockquote .alert-label { display: block; font-weight: 700; font-size: 12px; letter-spacing: .5px; text-transform: uppercase; margin-bottom: 6px; color: var(--text); }
+    .doc-body table { width: 100%; border-collapse: collapse; margin: 0 0 18px; font-size: 13.5px; display: block; overflow-x: auto; }
+    .doc-body th, .doc-body td { border: 1px solid var(--border); padding: 8px 11px; text-align: left; vertical-align: top; }
+    .doc-body th { background: var(--surface-2); font-weight: 700; }
+    .doc-body tr:nth-child(even) td { background: rgba(36,39,77,.4); }
+    .doc-body hr { border: none; border-top: 1px solid var(--border); margin: 24px 0; }
+    .doc-body img { max-width: 100%; border-radius: 8px; }
+    body.doc-open { overflow: hidden; }
   </style>
 </head>
 <body>
@@ -596,6 +676,187 @@
       </div>
     </div>
   </footer>
+
+  <!-- ============ Slide-in document reader ============ -->
+  <div class="doc-overlay" id="docOverlay"></div>
+  <aside class="doc-panel" id="docPanel" role="dialog" aria-modal="true" aria-label="Document reader">
+    <div class="doc-head">
+      <div style="flex:1; min-width:0;">
+        <div class="doc-title" id="docTitle">Document</div>
+        <div class="doc-path" id="docPath"></div>
+      </div>
+      <a class="doc-raw" id="docRaw" href="#" target="_blank" rel="noopener">Open full file ↗</a>
+      <button class="doc-close" id="docClose" aria-label="Close reader">×</button>
+    </div>
+    <div class="doc-body" id="docBody"></div>
+  </aside>
+
+  <script>
+  (function () {
+    "use strict";
+
+    var overlay = document.getElementById("docOverlay");
+    var panel   = document.getElementById("docPanel");
+    var bodyEl  = document.getElementById("docBody");
+    var titleEl = document.getElementById("docTitle");
+    var pathEl  = document.getElementById("docPath");
+    var rawEl   = document.getElementById("docRaw");
+    var closeEl = document.getElementById("docClose");
+    var currentDocUrl = null;
+
+    function escapeHtml(s) {
+      return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+    }
+    function slugify(s) {
+      return s.toLowerCase().replace(/<[^>]+>/g, "").replace(/[^\w\s-]/g, "").trim().replace(/\s+/g, "-");
+    }
+    function renderLink(txt, href) {
+      if (/^(https?:|mailto:)/i.test(href)) {
+        return '<a href="' + href + '" target="_blank" rel="noopener">' + txt + "</a>";
+      }
+      return '<a href="' + href + '">' + txt + "</a>";
+    }
+    function inlineMd(text) {
+      var codes = [];
+      text = text.replace(/`([^`]+)`/g, function (m, c) { codes.push(c); return "\uE011" + (codes.length - 1) + "\uE011"; });
+      text = escapeHtml(text);
+      text = text.replace(/!\[([^\]]*)\]\(([^)\s]+)(?:\s+"[^"]*")?\)/g, function (m, alt, src) { return '<img src="' + src + '" alt="' + alt + '">'; });
+      text = text.replace(/\[([^\]]+)\]\(([^)\s]+)(?:\s+"[^"]*")?\)/g, function (m, t, h) { return renderLink(t, h); });
+      text = text.replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>").replace(/__([^_]+)__/g, "<strong>$1</strong>");
+      text = text.replace(/(^|[^*])\*([^*\n]+)\*/g, "$1<em>$2</em>");
+      text = text.replace(/(^|[^_\w])_([^_\n]+)_(?!\w)/g, "$1<em>$2</em>");
+      text = text.replace(/~~([^~]+)~~/g, "<del>$1</del>");
+      text = text.replace(/\uE011(\d+)\uE011/g, function (m, i) { return "<code>" + escapeHtml(codes[+i]) + "</code>"; });
+      return text;
+    }
+    function renderList(items, ordered) {
+      var tag = ordered ? "ol" : "ul", out = "<" + tag + ">";
+      for (var k = 0; k < items.length; k++) {
+        var it = items[k], nested = [];
+        while (k + 1 < items.length && items[k + 1].indent > it.indent) { nested.push(items[k + 1]); k++; }
+        var inner = inlineMd(it.text.split("\n").join(" "));
+        out += nested.length ? "<li>" + inner + renderList(nested, nested[0].ordered) + "</li>" : "<li>" + inner + "</li>";
+      }
+      return out + "</" + tag + ">";
+    }
+    function isTableStart(lines, i) {
+      return i + 1 < lines.length && lines[i].indexOf("|") >= 0 &&
+        /^\s*\|?[\s:|-]+\|?\s*$/.test(lines[i + 1]) && lines[i + 1].indexOf("-") >= 0;
+    }
+    function md2html(md) {
+      md = md.replace(/\r\n?/g, "\n");
+      var blocks = [];
+      md = md.replace(/```([^\n]*)\n([\s\S]*?)```/g, function (m, lang, code) {
+        blocks.push(code.replace(/\n$/, "")); return "\n\uE000" + (blocks.length - 1) + "\uE000\n";
+      });
+      md = md.replace(/<!--[\s\S]*?-->/g, "");
+      var lines = md.split("\n"), html = "", i = 0;
+      var isBlank = function (l) { return /^\s*$/.test(l); };
+      while (i < lines.length) {
+        var line = lines[i], m;
+        if ((m = line.match(/^\uE000(\d+)\uE000$/))) { html += '<pre class="cb"><code>' + escapeHtml(blocks[+m[1]]) + "</code></pre>"; i++; continue; }
+        if (isBlank(line)) { i++; continue; }
+        if ((m = line.match(/^(#{1,6})\s+(.*?)\s*#*\s*$/))) { var lv = m[1].length; html += "<h" + lv + ' id="' + slugify(m[2]) + '">' + inlineMd(m[2]) + "</h" + lv + ">"; i++; continue; }
+        if (/^\s*([-*_])\1{2,}\s*$/.test(line)) { html += "<hr>"; i++; continue; }
+        if (isTableStart(lines, i)) {
+          var row = function (l) { return l.trim().replace(/^\|/, "").replace(/\|$/, "").split("|").map(function (c) { return c.trim(); }); };
+          var headers = row(line); i += 2; var rows = [];
+          while (i < lines.length && lines[i].indexOf("|") >= 0 && !isBlank(lines[i])) { rows.push(row(lines[i])); i++; }
+          var t = "<table><thead><tr>" + headers.map(function (c) { return "<th>" + inlineMd(c) + "</th>"; }).join("") + "</tr></thead><tbody>";
+          rows.forEach(function (r) { t += "<tr>" + r.map(function (c) { return "<td>" + inlineMd(c) + "</td>"; }).join("") + "</tr>"; });
+          html += t + "</tbody></table>"; continue;
+        }
+        if (/^\s*>/.test(line)) {
+          var buf = [];
+          while (i < lines.length && /^\s*>/.test(lines[i])) { buf.push(lines[i].replace(/^\s*>\s?/, "")); i++; }
+          var inner = buf.join("\n"), cls = "", label = "";
+          var al = inner.match(/^\s*\[!(NOTE|TIP|IMPORTANT|WARNING|CAUTION)\]\s*\n?/i);
+          if (al) {
+            var kind = al[1].toUpperCase(); inner = inner.slice(al[0].length);
+            cls = " alert-" + (kind === "WARNING" || kind === "CAUTION" ? "warning" : kind === "IMPORTANT" ? "important" : "note");
+            label = '<span class="alert-label">' + kind + "</span>";
+          }
+          html += '<blockquote class="' + cls.trim() + '">' + label + md2html(inner) + "</blockquote>"; continue;
+        }
+        if ((m = line.match(/^(\s*)([-*+]|\d+\.)\s+(.*)$/))) {
+          var items = [];
+          while (i < lines.length) {
+            var mm = lines[i].match(/^(\s*)([-*+]|\d+\.)\s+(.*)$/);
+            if (mm) { items.push({ indent: mm[1].length, ordered: /\d+\./.test(mm[2]), text: mm[3] }); i++; }
+            else if (!isBlank(lines[i]) && /^\s+\S/.test(lines[i])) { items[items.length - 1].text += "\n" + lines[i].trim(); i++; }
+            else break;
+          }
+          html += renderList(items, items[0].ordered); continue;
+        }
+        var pbuf = [];
+        while (i < lines.length && !isBlank(lines[i]) && !/^(#{1,6})\s/.test(lines[i]) && !/^\s*>/.test(lines[i]) &&
+               !/^\uE000\d+\uE000$/.test(lines[i]) && !/^\s*([-*+]|\d+\.)\s+/.test(lines[i]) &&
+               !/^\s*([-*_])\1{2,}\s*$/.test(lines[i]) && !isTableStart(lines, i)) { pbuf.push(lines[i]); i++; }
+        if (pbuf.length) { html += "<p>" + inlineMd(pbuf.join("\n")) + "</p>"; } else { i++; }
+      }
+      return html;
+    }
+
+    function shortPath(u) {
+      try { var url = new URL(u), p = url.pathname, base = new URL(".", document.baseURI).pathname;
+        if (p.indexOf(base) === 0) p = p.slice(base.length); return decodeURIComponent(p); }
+      catch (e) { return u; }
+    }
+    function openPanel() { overlay.classList.add("open"); panel.classList.add("open"); document.body.classList.add("doc-open"); }
+    function closePanel() { overlay.classList.remove("open"); panel.classList.remove("open"); document.body.classList.remove("doc-open"); }
+
+    function loadDoc(absUrl, title) {
+      openPanel();
+      currentDocUrl = absUrl.split("#")[0];
+      var hash = absUrl.split("#")[1];
+      titleEl.textContent = title || "Document";
+      pathEl.textContent = shortPath(currentDocUrl);
+      rawEl.href = currentDocUrl;
+      bodyEl.innerHTML = '<div class="doc-loading"><span class="doc-spinner"></span>Loading ' + escapeHtml(shortPath(currentDocUrl)) + "…</div>";
+      bodyEl.scrollTop = 0;
+      fetch(currentDocUrl).then(function (res) {
+        if (!res.ok) throw new Error("HTTP " + res.status);
+        return res.text();
+      }).then(function (text) {
+        bodyEl.innerHTML = md2html(text);
+        var h1 = bodyEl.querySelector("h1"); if (h1) titleEl.textContent = h1.textContent;
+        bodyEl.scrollTop = 0;
+        if (hash) { var el = bodyEl.querySelector("#" + (window.CSS && CSS.escape ? CSS.escape(hash) : hash)); if (el) el.scrollIntoView(); }
+      }).catch(function () {
+        bodyEl.innerHTML =
+          '<div class="doc-error"><p><strong>Couldn’t render this document in-page.</strong></p>' +
+          "<p>Browsers block reading local files when this page is opened straight from disk (a <code>file://</code> URL). " +
+          "The in-page reader works when the page is served over HTTP — for example via <em>GitHub Pages</em>, or a local " +
+          'preview such as VS Code “Live Preview” or <code>python -m http.server</code>.</p>' +
+          '<a class="btn btn-primary" href="' + currentDocUrl + '" target="_blank" rel="noopener">Open the file directly ↗</a></div>';
+      });
+    }
+
+    document.addEventListener("click", function (e) {
+      var a = e.target.closest ? e.target.closest("a") : null;
+      if (!a) return;
+      var raw = a.getAttribute("href");
+      if (!raw) return;
+      var inPanel = panel.contains(a);
+      if (inPanel && raw.charAt(0) === "#") {
+        var el = bodyEl.querySelector("#" + (window.CSS && CSS.escape ? CSS.escape(raw.slice(1)) : raw.slice(1)));
+        if (el) { e.preventDefault(); el.scrollIntoView(); }
+        return;
+      }
+      if (/^(https?:|mailto:)/i.test(raw) || raw.charAt(0) === "#") return;
+      var abs;
+      try { abs = new URL(raw, inPanel ? currentDocUrl : document.baseURI); } catch (_) { return; }
+      if (abs.pathname.toLowerCase().split("?")[0].split("#")[0].slice(-3) === ".md") {
+        e.preventDefault();
+        loadDoc(abs.href, a.textContent.trim());
+      }
+    });
+
+    closeEl.addEventListener("click", closePanel);
+    overlay.addEventListener("click", closePanel);
+    document.addEventListener("keydown", function (e) { if (e.key === "Escape") closePanel(); });
+  })();
+  </script>
 
 </body>
 </html>
