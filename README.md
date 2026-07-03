@@ -20,7 +20,9 @@ Declarative, version-controlled configuration of a Microsoft Purview environment
 
 ## Quick start
 
-From an empty copy to a tailored, deployable repo in six steps. Full detail: **[Tenant onboarding guide](docs/tenant-onboarding.md)**.
+**New here? Start with the [Kickoff guide](docs/kickoff-guide.md)** — the opinionated end-to-end walkthrough for standing up your own environment. The six steps below are the summary; the [Tenant onboarding guide](docs/tenant-onboarding.md) has the exact commands.
+
+From an empty copy to a tailored, deployable repo in six steps.
 
 1. **Get a copy.** Click **Use this template** on GitHub (a template-generated repo has unrelated history and cannot push back to the source), or `git clone https://github.com/<your-org>/<your-repo>.git` for a local workspace.
 2. **Decouple it.** Run the **Kickoff** agent [`@operator-kickoff`](.github/agents/operator-kickoff.agent.md) to choose a local workspace or a spin-off repo and install the no-push-back guard, per [ADR 0045](docs/adr/0045-template-kickoff-spinoff-model.md). (If you used **Use this template**, GitHub already decoupled you.)
@@ -87,6 +89,8 @@ References:
 │   ├── New-*.ps1  # One-time identity / Key Vault / certificate provisioning
 │   └── modules/
 ├── docs/
+│   ├── kickoff-guide.md  # Opinionated end-to-end kickoff walkthrough (start here)
+│   ├── tenant-onboarding.md  # Detailed step reference for standing up your environment
 │   ├── getting-started.md
 │   ├── architecture.md
 │   ├── project-plan.md  # v2 roadmap + progress checklist
