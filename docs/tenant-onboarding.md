@@ -5,6 +5,9 @@ tailored, deployable repository for **your** Microsoft Purview tenant. It orches
 clone → decouple → tailor → wire-up → deploy flow and hands off to [Getting started](getting-started.md)
 for the detailed identity setup.
 
+> Prefer a narrative overview first? See the [Kickoff guide](kickoff-guide.md) — this page is the
+> detailed step reference it links to.
+
 > This template ships tenant-neutral. Every tenant-specific value is a Microsoft-documented
 > placeholder (`contoso`, `contoso.onmicrosoft.com`, zero-GUID). It will **not** deploy against
 > a real tenant until you complete Step 3.
