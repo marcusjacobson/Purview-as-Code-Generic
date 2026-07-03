@@ -677,6 +677,645 @@
     </div>
   </footer>
 
+  <!--
+    Offline snapshots of the linked docs, so the reader panel works when this page is
+    opened directly from disk (file://) where browsers block fetch of local files.
+    When the page is served over HTTP the reader fetches the live file first and only
+    falls back to these snapshots. They are generated from the source docs — refresh
+    them whenever those docs change (see docs/README notes in PR #23).
+  -->
+  <!-- EMBEDDED-DOCS:START -->
+  <script type="text/markdown" data-doc="README.md">
+# Purview-as-Code — generic template
+
+> **This is a tenant-neutral template.** Every tenant-specific value is a placeholder using
+> Microsoft's documented fictitious identifiers (`contoso`, `contoso.onmicrosoft.com`). It will
+> **not** deploy against a real tenant until you make it yours. First run the **Kickoff** agent
+> [`@operator-kickoff`](.github/agents/operator-kickoff.agent.md) to choose where your copy lives
+> (a local workspace or your own GitHub repo) and sever it from this source template so it can
+> never contribute content back, per [ADR 0045](docs/adr/0045-template-kickoff-spinoff-model.md).
+> Then run the **Tenant Intake** agent [`@operator-tenant`](.github/agents/operator-tenant.agent.md),
+> or edit [`infra/parameters/lab.yaml`](infra/parameters/lab.yaml) by hand and follow
+> [Getting started](docs/getting-started.md). Placeholders to replace: GitHub org/repo, tenant
+> domain, resource group, Purview account name, Key Vault, Log Analytics, OIDC app display names,
+> CODEOWNERS handles, and the content-explorer wrapper-group object ID.
+
+Declarative, version-controlled configuration of a Microsoft Purview environment for a single tenant. Both the Azure resource (control plane) and the catalog contents (data plane) are expressed as code and deployed by GitHub Actions.
+
+> **Standing up your own environment? Start with the [Kickoff guide](docs/kickoff-guide.md)** — the opinionated end-to-end walkthrough from an empty copy to a deployed, tenant-tailored environment.
+
+> **Template repository.** This repo is enabled as a [GitHub template](https://docs.github.com/en/repositories/creating-and-managing-repositories/creating-a-repository-from-a-template) — click **Use this template** to create your own copy. A template-generated repo starts with a clean history and cannot open a pull request back to this source, which is the preferred spin-off path in [ADR 0045](docs/adr/0045-template-kickoff-spinoff-model.md).
+
+> **Target account (placeholder):** `contoso-lab` Microsoft Purview account (tenant `contoso.onmicrosoft.com`).
+
+## Quick start
+
+**New here? Start with the [Kickoff guide](docs/kickoff-guide.md)** — the opinionated end-to-end walkthrough for standing up your own environment. The six steps below are the summary; the [Tenant onboarding guide](docs/tenant-onboarding.md) has the exact commands.
+
+From an empty copy to a tailored, deployable repo in six steps.
+
+1. **Get a copy.** Click **Use this template** on GitHub (a template-generated repo has unrelated history and cannot push back to the source), or `git clone https://github.com/<your-org>/<your-repo>.git` for a local workspace.
+2. **Decouple it.** Run the **Kickoff** agent [`@operator-kickoff`](.github/agents/operator-kickoff.agent.md) to choose a local workspace or a spin-off repo and install the no-push-back guard, per [ADR 0045](docs/adr/0045-template-kickoff-spinoff-model.md). (If you used **Use this template**, GitHub already decoupled you.)
+3. **Tailor it.** Run the **Tenant Intake** agent [`@operator-tenant`](.github/agents/operator-tenant.agent.md). It interviews you for your tenant values and writes them into [`infra/parameters/lab.yaml`](infra/parameters/lab.yaml) and the identity-boundary statements.
+4. **Review the diff** the agent produced, then commit it on a branch.
+5. **Wire up identity.** Create the Microsoft Entra app + OIDC federated credential, set the GitHub Environment secrets, and set the `OWNER_APPROVAL_LOGIN` repository variable — see [Getting started §1–§2](docs/getting-started.md).
+6. **Validate and deploy.** Run `az bicep build` and the Pester suite, then the `deploy-infra` / `deploy-data-plane` workflows — see the [Tenant onboarding guide](docs/tenant-onboarding.md) and [Getting started §4](docs/getting-started.md).
+
+## Why two planes?
+
+Microsoft Purview does not expose a single "Purview-as-Code" product. A complete IaC repo must manage two independent planes, each with its own API surface and auth model:
+
+| Plane | What it manages | API | Auth | This repo |
+|---|---|---|---|---|
+| **Control plane** | The `Microsoft.Purview/accounts` resource, networking, managed identity, SKU | Azure Resource Manager | Azure RBAC (Contributor on RG) | [`infra/`](infra/) — Bicep |
+| **Data plane** | Sensitivity labels, DLP, data lifecycle and records management, insider risk, communication compliance, DSPM, plus Data Map collections, glossary, classifications, data sources, and scans | Microsoft Purview data-plane APIs (REST and Security & Compliance PowerShell) | App-only automation identity (certificate in Key Vault, OIDC from GitHub Actions) with least-privilege Microsoft Purview roles | [`data-plane/`](data-plane/) + [`scripts/`](scripts/) — YAML rendered by PowerShell |
+
+References:
+
+- [Microsoft.Purview/accounts resource (Bicep/ARM/Terraform)](https://learn.microsoft.com/en-us/azure/templates/microsoft.purview/accounts)
+- [Authenticate for Purview APIs](https://learn.microsoft.com/en-us/purview/data-gov-api-rest-data-plane)
+- [Purview Data Plane REST API reference](https://learn.microsoft.com/en-us/rest/api/purview/)
+- [Access control in Microsoft Purview](https://learn.microsoft.com/en-us/purview/data-gov-classic-permissions)
+- [Azure Verified Module — Purview Account](https://aka.ms/avm)
+
+## Repository layout
+
+```text
+.
+├── .github/
+│   ├── workflows/  # CI (validate) and CD (deploy-infra, deploy-data-plane)
+│   ├── instructions/  # Path-scoped Copilot rules (Bicep, PowerShell, YAML, ...)
+│   ├── prompts/  # Reusable /-invoked task templates
+│   └── agents/  # Workspace-scoped Squad agents (personas)
+├── infra/  # Bicep: Purview account + dependencies (control plane)
+│   ├── main.bicep
+│   ├── main.bicepparam
+│   ├── modules/
+│   └── parameters/
+├── data-plane/  # Desired-state governance content — one folder per Purview solution
+│   ├── information-protection/  # Sensitivity labels + label / auto-label policies
+│   ├── classifications/  # Sensitive information type (SIT) catalog
+│   ├── audit/
+│   ├── dlp/
+│   ├── data-lifecycle/
+│   ├── records/
+│   ├── irm/  # Insider Risk Management
+│   ├── communication-compliance/
+│   ├── dspm/
+│   ├── dspm-ai/
+│   ├── adaptive-scopes/
+│   ├── collections/  # Data Map collection hierarchy
+│   ├── glossary/
+│   ├── data-sources/
+│   ├── scans/
+│   ├── unified-catalog/
+│   ├── purview-role-groups/
+│   ├── entra-directory-roles/
+│   └── administrative-units/
+├── scripts/  # PowerShell 7+ reconcilers, smoke tests, provisioning helpers
+│   ├── Connect-Purview.ps1
+│   ├── Deploy-*.ps1  # Idempotent reconciler per data-plane solution
+│   ├── Invoke-*SmokeTest.ps1  # End-to-end lab smoke tests
+│   ├── New-*.ps1  # One-time identity / Key Vault / certificate provisioning
+│   └── modules/
+├── docs/
+│   ├── kickoff-guide.md  # Opinionated end-to-end kickoff walkthrough (start here)
+│   ├── tenant-onboarding.md  # Detailed step reference for standing up your environment
+│   ├── getting-started.md
+│   ├── architecture.md
+│   ├── project-plan.md  # v2 roadmap + progress checklist
+│   ├── adr/  # Architecture decision records
+│   ├── governance/
+│   ├── runbooks/
+│   ├── solutions/
+│   └── archive/  # Archived v1 plan
+├── tests/  # Pester 5.x unit tests for scripts/ (no live tenant)
+├── AGENTS.md
+└── README.md
+```
+
+## Deployment summary
+
+> For the full walkthrough from an empty copy to a deployed environment, see the [Kickoff guide](docs/kickoff-guide.md).
+
+1. **Prerequisites** — see [`docs/getting-started.md`](docs/getting-started.md).
+2. **Create the deployment service principal** and grant it the required Purview data plane roles (one-time) — see [Authenticate for APIs](https://learn.microsoft.com/en-us/purview/data-gov-api-rest-data-plane).
+3. **Configure GitHub secrets/variables**: `AZURE_CLIENT_ID`, `AZURE_TENANT_ID`, `AZURE_SUBSCRIPTION_ID`, `PURVIEW_ACCOUNT_NAME`.
+4. **Provision control plane**: push to `main`, the `deploy-infra` workflow runs `az deployment group create` against [`infra/main.bicep`](infra/main.bicep).
+5. **Deploy data plane**: `deploy-data-plane` workflow renders YAML under [`data-plane/`](data-plane/) into REST API calls.
+
+## Design principles
+
+- **Idempotent** — every apply script GETs current state, diffs, then PUT/PATCHes.
+- **Declarative YAML** — human-reviewable; pull request = change review.
+- **Least privilege** — OIDC federated credentials from GitHub → Entra; no long-lived secrets.
+- **Separation of concerns** — control-plane PRs never change catalog content and vice versa.
+
+## Status
+
+**Roadmap.** This template ships with an empty feature roadmap. New here? The [Kickoff guide](docs/kickoff-guide.md) walks you through standing up your environment end to end. See [`docs/project-plan.md`](docs/project-plan.md) to plan and track which Microsoft Purview features you adopt into as-code governance, and [`docs/getting-started.md`](docs/getting-started.md) to set up the tenant connection.
+
+Scheduled watch loops (drift, surface, and the planned code- and feature-currency loops) file their findings as review issues into a discoverable queue — see [`.github/copilot-automations/README.md`](.github/copilot-automations/README.md).
+
+  </script>
+  <script type="text/markdown" data-doc="docs/kickoff-guide.md">
+# Kickoff guide — stand up your own Purview-as-Code environment
+
+This is the **opinionated, end-to-end walkthrough** for turning this template into a running
+Purview-as-Code environment for *your* Microsoft Purview tenant. It orients you through the whole
+journey and points to the detailed references at each step:
+
+- [`docs/tenant-onboarding.md`](tenant-onboarding.md) — the exact step-by-step commands.
+- [`docs/getting-started.md`](getting-started.md) — the detailed identity, secrets, and deploy setup.
+- [`docs/architecture.md`](architecture.md) — the two-plane model and CI/CD flow.
+
+If you just want the command checklist, go straight to the
+[tenant onboarding guide](tenant-onboarding.md). Read on for the *why* behind each choice.
+
+## Who this is for
+
+You want your own version of this repository — managing one Microsoft Purview tenant as code —
+without any risk of your content flowing back into the source template. This guide assumes you can
+create an Entra app registration, deploy into an Azure resource group, and run VS Code with GitHub
+Copilot Chat (the custom agents are a VS Code feature).
+
+## The two planes (in one minute)
+
+Microsoft Purview has no single "Purview-as-Code" product, so this repo manages two independent
+planes — keep changes to one plane per pull request:
+
+- **Control plane** — the `Microsoft.Purview/accounts` resource and its Azure dependencies, as
+  Bicep under [`infra/`](../infra/). Deployed via Azure Resource Manager. See
+  [Microsoft.Purview/accounts](https://learn.microsoft.com/en-us/azure/templates/microsoft.purview/accounts).
+- **Data plane** — sensitivity labels, DLP, lifecycle, DSPM, Data Map collections, glossary,
+  classifications, sources, and scans, as YAML under [`data-plane/`](../data-plane/) rendered by
+  PowerShell reconcilers in [`scripts/`](../scripts/). Deployed via the Purview data-plane APIs. See
+  [Authenticate for Purview APIs](https://learn.microsoft.com/en-us/purview/data-gov-api-rest-data-plane).
+
+Full picture: [`docs/architecture.md`](architecture.md).
+
+## The journey
+
+### 1. Get a copy
+
+**Recommended: click "Use this template" on GitHub.** A template-generated repository starts with a
+clean history and *structurally cannot open a pull request back* to this source — the strongest form
+of the no-push-back boundary. See
+[Creating a repository from a template](https://docs.github.com/en/repositories/creating-and-managing-repositories/creating-a-repository-from-a-template).
+
+Prefer a local-only workspace instead? `git clone` it and pick the local-workspace mode in the next
+step.
+
+### 2. Decouple with the Kickoff agent
+
+Open the copy in VS Code, start Copilot Chat, and run [`@operator-kickoff`](../.github/agents/operator-kickoff.agent.md).
+It offers two modes and installs the **no-push-back guard**, then verifies it, per
+[ADR 0045](adr/0045-template-kickoff-spinoff-model.md):
+
+- **Local workspace** — removes the source `origin` and resets history for a clean break.
+- **Spin-off GitHub repository** — your own repo (preferring "Use this template"); it resolves the
+  true source via the GitHub template relationship, never your own `origin`.
+
+If you used "Use this template", GitHub already decoupled you — the agent then installs only the
+optional local `pre-push` backstop.
+
+### 3. Tailor for your tenant
+
+Run [`@operator-tenant`](../.github/agents/operator-tenant.agent.md). It interviews you one question
+at a time and writes your values into [`infra/parameters/lab.yaml`](../infra/parameters/lab.yaml) and
+the identity-boundary statements — **never** a secret or real subscription/tenant/object ID. Review
+the diff and commit it on a branch.
+
+### 4. Wire up identity and secrets
+
+Authenticate GitHub Actions to Azure with a Microsoft Entra app + OIDC federated credential — no
+stored client secret. Set the environment secrets (`AZURE_CLIENT_ID`, `AZURE_TENANT_ID`,
+`AZURE_SUBSCRIPTION_ID`), the `PURVIEW_ACCOUNT_NAME` variable, and the `OWNER_APPROVAL_LOGIN`
+repository variable (your GitHub login — the auto-merge gate reads it). Exact commands:
+[Getting started §1–§2](getting-started.md). Grounding:
+[Use Azure Login with OpenID Connect](https://learn.microsoft.com/en-us/azure/developer/github/connect-from-azure-openid-connect),
+[Store information in variables](https://docs.github.com/en/actions/how-tos/write-workflows/choose-what-workflows-do/use-variables).
+
+Grant the deploy identity least-privilege roles: **Contributor** on your resource group (control
+plane) and the Microsoft Purview roles **Collection Admin**, **Data Curator**, and
+**Data Source Administrator** at the root collection (data plane). See
+[Access control in Microsoft Purview](https://learn.microsoft.com/en-us/purview/data-gov-classic-permissions).
+
+### 5. Validate, then deploy
+
+Run `az bicep build --file infra/main.bicep` and `pwsh -File tests/Run-Pester.ps1` locally; both must
+pass. Then run the `deploy-infra` and `deploy-data-plane` workflows. Exact steps:
+[tenant onboarding §6–§7](tenant-onboarding.md) and [Getting started §4](getting-started.md).
+
+### 6. Adopt features, one at a time
+
+Your environment is now live but the feature roadmap ships empty. From here, all work is
+**agent-led** and runs one item at a time:
+
+`@idea-intake` → `@artifact-resolver` → `@owner-approval`
+
+Populate [`docs/project-plan.md`](project-plan.md) as you bring each Microsoft Purview feature into
+as-code governance. See [`.github/agents/README.md`](../.github/agents/README.md) for the full agent
+index and [ADR 0014](adr/0014-agents-as-default-entry-point.md) for why the agents are the default
+entry point.
+
+## Guardrails you inherit
+
+- **No push-back to the source template.** The kickoff guard (origin severance, disabled upstream
+  push URL, `pre-push` hook, agent refusal) plus the template repository setting make it structurally
+  hard for your copy to contribute content back. See [ADR 0045](adr/0045-template-kickoff-spinoff-model.md).
+- **No secrets, no real identifiers in source.** Real tenant/subscription/object IDs and the owner
+  login live in GitHub secrets/variables, never in committed files.
+- **Least privilege and OIDC everywhere.** No long-lived client secrets in CI.
+
+## References
+
+- **[Creating a repository from a template](https://docs.github.com/en/repositories/creating-and-managing-repositories/creating-a-repository-from-a-template)**
+  Fetch date: 2026-07-03
+  > "a repository created from a template starts with a single commit."
+- **[Microsoft.Purview/accounts (Bicep/ARM)](https://learn.microsoft.com/en-us/azure/templates/microsoft.purview/accounts)** — control-plane resource.
+- **[Authenticate for Purview APIs](https://learn.microsoft.com/en-us/purview/data-gov-api-rest-data-plane)** — data-plane auth.
+- **[Access control in Microsoft Purview](https://learn.microsoft.com/en-us/purview/data-gov-classic-permissions)** — least-privilege roles.
+- **[Use Azure Login with OpenID Connect](https://learn.microsoft.com/en-us/azure/developer/github/connect-from-azure-openid-connect)** — OIDC for CI/CD.
+- [Tenant onboarding guide](tenant-onboarding.md) · [Getting started](getting-started.md) · [Architecture](architecture.md) · [ADR 0045](adr/0045-template-kickoff-spinoff-model.md)
+
+  </script>
+  <script type="text/markdown" data-doc="docs/getting-started.md">
+# Getting started
+
+This guide wires the scaffolded repo to your existing `contoso-lab` Microsoft Purview account.
+
+## 1. One-time: deployment identity
+
+Create (or reuse) an Entra application that GitHub Actions will impersonate via OIDC federated credentials. Detailed steps: [Authenticate for APIs](https://learn.microsoft.com/en-us/purview/data-gov-api-rest-data-plane).
+
+```bash
+# Create the app + service principal
+az ad app create --display-name "gh-Purview-as-Code-Generic"
+APP_ID=$(az ad app list --display-name "gh-Purview-as-Code-Generic" --query "[0].appId" -o tsv)
+az ad sp create --id "$APP_ID"
+SP_OID=$(az ad sp show --id "$APP_ID" --query id -o tsv)
+
+# Add a GitHub OIDC federated credential (replace owner/repo/ref)
+az ad app federated-credential create --id "$APP_ID" --parameters '{
+  "name": "github-main",
+  "issuer": "https://token.actions.githubusercontent.com",
+  "subject": "repo:contoso/Purview-as-Code-Generic:ref:refs/heads/main",
+  "audiences": ["api://AzureADTokenExchange"]
+}'
+```
+
+Grant the service principal:
+
+1. **Azure RBAC** — `Contributor` on the target resource group (needed for `infra/` deployment).
+2. **Purview data plane roles** — assigned at the root collection of the Purview account:
+   - `Collection Admin` — required for account/metadata APIs, collection CRUD, role assignments.
+   - `Data Curator` — required for glossary, classification typedefs, lineage.
+   - `Data Source Administrator` — required for data source registration and scans.
+
+> [!NOTE]
+> `Policy Author` is **not** required. This repo does not author DevOps / data-owner policies — that reconciler was retired per [ADR 0038](adr/0038-devops-policies-reconciler-retirement.md).
+
+Assignment UI: Purview portal → Data Map → Collections → root → **Role assignments**. See [Access control in Microsoft Purview](https://learn.microsoft.com/en-us/purview/data-gov-classic-permissions).
+
+## 2. GitHub configuration
+
+Under **Settings → Secrets and variables → Actions**:
+
+- Secrets (Environment: `lab`):
+  - `AZURE_CLIENT_ID` = `$APP_ID`
+  - `AZURE_TENANT_ID`
+  - `AZURE_SUBSCRIPTION_ID`
+- Variables (Environment: `lab`):
+  - `PURVIEW_ACCOUNT_NAME` = `purview-contoso-lab` (or your actual account name)
+- Variables (Repository — not environment-scoped, because [`pr-auto-merge.yml`](../.github/workflows/pr-auto-merge.yml) runs without an `environment:`):
+  - `OWNER_APPROVAL_LOGIN` = your GitHub login (the lab owner). The auto-merge workflow only enables merge when the `owner-approved` label is applied by this login. Set under **Settings → Secrets and variables → Actions → Variables**. See [Store information in variables](https://docs.github.com/en/actions/how-tos/write-workflows/choose-what-workflows-do/use-variables).
+
+Create the `lab` environment (Settings → Environments → New environment → `lab`).
+
+## 3. Point at the existing Purview account
+
+The `contoso-lab` account already exists, so the control-plane deploy will reconcile its properties (idempotent). Before the first run:
+
+1. Edit [`infra/main.bicepparam`](../infra/main.bicepparam) so `purviewAccountName` and `location` match the existing account.
+2. Edit [`data-plane/collections/collections.yaml`](../data-plane/collections/collections.yaml) so `rootCollection` equals the existing account name (root collection shares the account name).
+
+## 4. First deploy
+
+```bash
+# Optional local dry run
+az login
+pwsh ./scripts/Deploy-Collections.ps1     -AccountName purview-contoso-lab -WhatIf
+pwsh ./scripts/Deploy-Glossary.ps1        -AccountName purview-contoso-lab -WhatIf
+pwsh ./scripts/Deploy-Classifications.ps1 -AccountName purview-contoso-lab -WhatIf
+```
+
+Then push to `main` — `deploy-infra` runs first, followed by `deploy-data-plane`.
+
+## 5. Day-2 workflow
+
+- All changes via pull request.
+- `validate` runs on every PR (Bicep lint, yamllint, PSScriptAnalyzer).
+- Merging to `main` triggers the deploy workflow for whichever plane changed.
+- Destructive operations (collection delete, glossary term delete) are gated behind explicit `-PruneMissing` flags that are deliberately not enabled in CI yet.
+
+## 6. Context handoffs between chat sessions
+
+Long iterations of [`/build-item`](../.github/prompts/build-item.prompt.md) can fill the Copilot Chat context window or span multiple work sessions. Two prompt files manage the handoff:
+
+- [`/prepare-handoff`](../.github/prompts/prepare-handoff.prompt.md) — run **at the end** of a chat session that needs to pause. It writes a single Markdown brief to `.copilot-tracking/handoff/<branch>-<timestamp>.md` describing what was validated, what's left, and which prompt to resume with. The `.copilot-tracking/` folder is gitignored, so the brief is local-only scratch and never lands in a PR.
+- [`/resume-from-handoff`](../.github/prompts/resume-from-handoff.prompt.md) — run **at the start** of a fresh chat session. It loads the most recent brief, re-runs branch and working-tree precondition checks, restates the next step, and routes back to `/build-item` (or `@artifact-resolver`, or an ADR draft) per the brief. After a successful hand-off the brief is deleted automatically — briefs are one-shot.
+
+When to use them: context window ≥ 80% full, more than ~30 tool calls accumulated in the session, topic shifting between planes, end of a work day, or handing off to another contributor. See [`.github/instructions/context-handoff.instructions.md`](../.github/instructions/context-handoff.instructions.md) for the full trigger list and the rules on what a brief MUST and MUST NOT contain (no secrets, no real identifiers, no tool-call transcripts).
+
+When **not** to use them: for "ask a quick side question", prefer VS Code's [`/fork`](https://code.visualstudio.com/docs/copilot/chat/chat-sessions#_fork-a-chat-session). For "this iteration went sideways, undo", use [chat checkpoints](https://code.visualstudio.com/docs/copilot/chat/chat-checkpoints). Handoffs are for *cross-session resume*, not undo or branching.
+
+  </script>
+  <script type="text/markdown" data-doc="docs/architecture.md">
+# Architecture
+
+## Two-plane model
+
+```mermaid
+flowchart LR
+    PR[Pull request] --> Validate[validate.yml<br/>Bicep lint · yamllint · PSScriptAnalyzer]
+    Validate -->|merge| Main[main branch]
+    Main -->|infra/** changed| Infra[deploy-infra.yml]
+    Main -->|data-plane/** or scripts/** changed| Data[deploy-data-plane.yml]
+
+    Infra -->|az deployment group create| ARM[(Azure Resource Manager)]
+    ARM -->|Microsoft.Purview/accounts| Account[Purview Account<br/>purview-contoso-lab]
+
+    Data -->|OIDC| Entra[(Entra ID)]
+    Entra -->|Bearer https://purview.azure.net| DP[Purview Data Plane APIs]
+    DP --> Collections
+    DP --> Glossary
+    DP --> Classifications
+    DP --> Sources[Data Sources]
+    DP --> Scans
+
+    subgraph Purview account
+        Account
+        Collections
+        Glossary
+        Classifications
+        Sources
+        Scans
+    end
+```
+
+## Why this shape
+
+- **Account name is identity.** The Purview account name is the DNS hostname of the data plane (`<name>.purview.azure.com`) and the name of the root collection. Renaming is effectively a rebuild; IaC treats it as a fixed input.
+- **Data plane is not in ARM.** Collections, glossary, classifications, sources, and scans are invisible to Bicep/Terraform. They live behind the Atlas v2 / Purview scan / Purview account REST APIs. That is why this repo ships PowerShell helpers driven by YAML manifests.
+- **OIDC > client secret.** The federated credential on the Entra app lets GitHub Actions obtain short-lived tokens for both `https://management.azure.com` (ARM) and `https://purview.azure.net` (data plane) with no stored secret.
+- **Idempotent upserts.** Each script resolves current state and issues PUTs. Deletes are deliberately opt-in to prevent a mis-merged PR from dropping production collections.
+
+## Endpoints & API versions
+
+| Concern | Endpoint | API version |
+|---|---|---|
+| Account / collections | `https://<acct>.purview.azure.com/account` | `2019-11-01-preview` |
+| Atlas (glossary, typedefs, entities) | `https://<acct>.purview.azure.com/datamap/api/atlas/v2` | Atlas v2 |
+| Scanning (sources, scans, rulesets) | `https://<acct>.purview.azure.com/scan` | `2022-02-01-preview` |
+
+> [!NOTE]
+> The DevOps / data-owner policies surface (`https://<acct>.purview.azure.com/policystore`, `2022-08-01-preview`) is **no longer managed by this repo**. Its reconciler was retired per [ADR 0038](adr/0038-devops-policies-reconciler-retirement.md) — the surface is in classic customer-support mode with documentation mirrored under `/purview/legacy/` and no GA `api-version`.
+
+References: [Purview REST API index](https://learn.microsoft.com/en-us/rest/api/purview/), [Microsoft.Purview/accounts Bicep](https://learn.microsoft.com/en-us/azure/templates/microsoft.purview/accounts).
+
+
+## Reference patterns adopted from `Azure-Deployment-Pipelines`
+
+The reference repo (`Azure-Deployment-Pipelines/Purview/`) ships three working solutions today: `Purview-AutoLabel-Policy`, `Bulk-Sensitivity-Label-Change-M365`, and `SIT-Confidence-Analysis` (sister repo; paths are workspace-local on the lab owner's machine, not navigable from this repo). Patterns worth porting, with this repo's translation:
+
+| Reference repo pattern | This repo's translation |
+|---|---|
+| `ExchangeOnlineManagement` v3.0+ with `Connect-IPPSSession` for Security & Compliance Center cmdlets | Same module, same cmdlet. Add `Connect-ComplianceCenter.ps1` helper alongside [`scripts/Connect-Purview.ps1`](../scripts/Connect-Purview.ps1). |
+| App-only cert-in-Key-Vault auth for unattended runs | Same pattern. Certificate issued into the existing lab Key Vault, federated to the GitHub Actions workload identity per [Use Azure Login with OpenID Connect](https://learn.microsoft.com/en-us/azure/developer/github/connect-from-azure-openid-connect). |
+| Three policy modes: `TestWithoutNotifications` → `TestWithNotifications` → `Enable` | Preserved verbatim in `data-plane/information-protection/auto-label-policies.yaml` as `mode:`. Default in new files is `TestWithoutNotifications`. |
+| Three confidence tiers: Low (≤65%) / Medium (66–84%) / High (85–100%) | Preserved. Encoded as `confidenceLevel:` on each SIT reference. See [Sensitive information type confidence levels](https://learn.microsoft.com/en-us/purview/sensitive-information-type-learn-about#more-information-on-confidence-levels). |
+| SIT identity by GUID (for example, `a44669fe-0d48-453d-a9b1-2cc83f2cba77` for U.S. SSN) | Preserved. GUIDs live in `data-plane/classifications/sit-catalog.yaml` with a human-readable `displayName:` beside each one. |
+| `params.json` per-solution config file | Translated to YAML (`solution.yaml` + `*.params.yaml`) to match [`.github/instructions/data-plane-yaml.instructions.md`](../.github/instructions/data-plane-yaml.instructions.md). JSON is not a first-class format here. |
+| Azure DevOps pipelines with service connections | Translated to GitHub Actions with OIDC federated credentials. Same outcome, different CI. |
+| Content Explorer CSV export as the confidence-analysis data source (not Data Explorer) | Preserved as guidance in the DSPM/analysis wave. |
+| Windows PowerShell 5.1 requirement for WAM | **Not adopted.** This repo mandates pwsh 7.4+ per [`.github/instructions/powershell.instructions.md`](../.github/instructions/powershell.instructions.md). Any cmdlet that truly requires 5.1 is called out in an ADR or avoided. |
+
+## Sensitivity label protection model
+
+Each encrypted sublabel in [`data-plane/information-protection/labels.yaml`](../data-plane/information-protection/labels.yaml) declares a `protectionType:` value (`Template`, `UserDefined`, or `RemoveProtection`). The choice is a deliberate security-posture trade-off; flipping it changes both the runtime behavior and the Microsoft Purview portal UX. The repo default is `UserDefined`.
+
+| `protectionType:` | Permissions source | UI "Assign permissions" editor | When to choose |
+|---|---|---|---|
+| `Template` | Permissions are baked into the label and applied identically every time the label is set. | Grayed out in the Purview portal — users and admins cannot adjust per-document permissions. | High-assurance scenarios where the permission set must be uniform, auditable, and immune to user error (regulated data, compliance-driven access controls). |
+| `UserDefined` | Permissions are chosen at apply time by the labeller (user or admin) within the bounds the label allows. | Available in the Purview portal — permissions can be set per document. | Day-to-day collaboration where the labeller needs flexibility (sharing specific files with named partners, ad-hoc external recipients). |
+| `RemoveProtection` | No encryption applied; any prior encryption is stripped. | Not applicable. | Down-classification flows and explicit "unprotect" sublabels. |
+
+Switching between `Template` and `UserDefined` is a YAML edit followed by a reconciler apply (`./scripts/Deploy-Labels.ps1`). It is reversible at any time. Re-evaluate the choice during any review that touches label scope, audience, or compliance posture. References: [Set-Label cmdlet](https://learn.microsoft.com/en-us/powershell/module/exchange/set-label), [Configure usage rights for Azure Information Protection](https://learn.microsoft.com/en-us/azure/information-protection/configure-usage-rights).
+
+### Applying label changes via CI
+
+Sensitivity labels are reconciled by the `Deploy sensitivity labels` step in the [`deploy-data-plane`](../.github/workflows/deploy-data-plane.yml) workflow. The workflow is manual-dispatch only (`workflow_dispatch`), and the labels step shares the same Key Vault firewall open/close window as the role-groups step so the vault returns to `publicNetworkAccess: Disabled` after every run.
+
+Dispatch procedure:
+
+1. Open the workflow in the GitHub Actions UI: **Actions → deploy-data-plane → Run workflow**.
+2. Choose inputs:
+   - `plan_labels_only: true` — runs `Deploy-Labels.ps1 -WhatIf`. No `Set-Label` calls; produces the plan table only. Use this first whenever the YAML has changed since the last apply.
+   - `plan_labels_only: false` (default) — runs `Deploy-Labels.ps1` for a live apply against the lab tenant.
+   - `prune_role_groups`: leave `false` unless the dispatch is specifically reconciling role-group drift; it does not affect labels.
+3. Confirm the run targets the `lab` environment and the `feat/...` or `main` ref you expect.
+4. After completion, inspect the `Deploy sensitivity labels` step log for the reconciler plan table and any `WARNING` rows (for example, the documented `autoApplicationOf` create-path gap).
+
+Who can dispatch: anyone with `write` access to the repo can dispatch, but the dispatch flows through the `lab` GitHub environment which is owner-gated. The data-plane workload identity (`gh-oidc-purview-data-plane`) is the principal that mutates labels; portal UI changes by humans require membership in `sg-purview-information-protection-admins`.
+
+  </script>
+  <script type="text/markdown" data-doc="docs/tenant-onboarding.md">
+# Tenant onboarding
+
+This guide takes a fresh clone of the **Purview-as-Code generic template** from zero to a
+tailored, deployable repository for **your** Microsoft Purview tenant. It orchestrates the
+clone → decouple → tailor → wire-up → deploy flow and hands off to [Getting started](getting-started.md)
+for the detailed identity setup.
+
+> Prefer a narrative overview first? See the [Kickoff guide](kickoff-guide.md) — this page is the
+> detailed step reference it links to.
+
+> This template ships tenant-neutral. Every tenant-specific value is a Microsoft-documented
+> placeholder (`contoso`, `contoso.onmicrosoft.com`, zero-GUID). It will **not** deploy against
+> a real tenant until you complete Step 3.
+
+## Prerequisites
+
+- An **Azure subscription** and a **resource group** you can deploy into (the deploy identity is
+  Contributor-scoped to that group; it must already exist).
+- A **Microsoft Entra tenant** where you can create an app registration and (optionally) security
+  groups.
+- A **Microsoft Purview account** (existing, or one you will create via `infra/`).
+- A **GitHub repository** created from this template (see Step 1).
+- **VS Code** with **GitHub Copilot Chat** (custom agents are a VS Code feature, per
+  [Custom agents in VS Code](https://code.visualstudio.com/docs/copilot/customization/custom-chat-modes)).
+- Local tooling for validation: **Azure CLI** (`az`, includes Bicep), **PowerShell 7.4+**, and
+  **Pester 5.x** (the test runner installs it if missing).
+
+## Step 1 — Get a copy of the template
+
+Use either path:
+
+- **GitHub UI (recommended for a spin-off repo):** click **Use this template → Create a new
+  repository**. A template-generated repository starts from a single commit with unrelated
+  history, so it cannot open a pull request back to the source template. See
+  [Creating a repository from a template](https://docs.github.com/en/repositories/creating-and-managing-repositories/creating-a-repository-from-a-template).
+- **Command line (for a local workspace):**
+
+  ```bash
+  git clone https://github.com/<your-org>/<your-repo>.git
+  cd <your-repo>
+  ```
+
+## Step 2 — Decouple your copy with the Kickoff agent
+
+Sever your copy from the source template so it can never contribute content back, per
+[ADR 0045](adr/0045-template-kickoff-spinoff-model.md).
+
+- If you used **Use this template** (Step 1), GitHub already decoupled you: a template-generated
+  repository has unrelated history and cannot open a pull request back to the source. You can skip
+  to Step 3. (If you run `@operator-kickoff` here anyway, it resolves the true source via the
+  GitHub template relationship, not `origin`, and installs only the optional pre-push backstop.)
+- If you **cloned** the template, open the repo in VS Code, start Copilot Chat, and run the
+  **Kickoff** agent:
+
+  ```text
+  @operator-kickoff
+  ```
+
+  The agent ([`.github/agents/operator-kickoff.agent.md`](../.github/agents/operator-kickoff.agent.md))
+  offers **Local workspace** (removes the source `origin` and resets history) or **Spin-off GitHub
+  repository** (creates your own repo and repoints `origin`), installs the no-push-back guard
+  ([`scripts/Set-KickoffGuard.ps1`](../scripts/Set-KickoffGuard.ps1)), verifies it
+  ([`scripts/Test-KickoffGuard.ps1`](../scripts/Test-KickoffGuard.ps1)), then hands off to the
+  Tenant Intake agent.
+
+## Step 3 — Tailor the copy with the Tenant Intake agent
+
+Create a working branch so the tailoring lands as a reviewable diff:
+
+```bash
+git checkout -b chore/tenant-intake
+```
+
+Open the repo in VS Code, start Copilot Chat, and invoke the **Tenant Intake** agent:
+
+```text
+@operator-tenant
+```
+
+The agent ([`.github/agents/operator-tenant.agent.md`](../.github/agents/operator-tenant.agent.md))
+interviews you for your tenant values one question at a time, then — only after you confirm — writes
+them into:
+
+- [`infra/parameters/lab.yaml`](../infra/parameters/lab.yaml) — the single source of truth for
+  environment, region, resource group, Purview account, Key Vault, Log Analytics, tenant domain,
+  and the OIDC app display names. Per
+  [Bicep parameter files](https://learn.microsoft.com/en-us/azure/azure-resource-manager/bicep/parameter-files).
+- [`infra/main.bicepparam`](../infra/main.bicepparam) — the control-plane parameters.
+- The **identity-boundary statements** in
+  [`.github/copilot-instructions.md`](../.github/copilot-instructions.md), `README.md`,
+  [`.github/CODEOWNERS`](../.github/CODEOWNERS), and the naming instructions.
+
+What the agent **never** does: store a secret or real subscription/tenant/object ID in any file,
+and never deploy. Subscription and tenant IDs belong in GitHub secrets, not in source (Step 5).
+
+> Prefer to edit by hand? Open [`infra/parameters/lab.yaml`](../infra/parameters/lab.yaml) and
+> replace the values in the `TEMPLATE — replace the placeholder values below` header block.
+
+## Step 4 — Review the tailoring diff
+
+```bash
+git --no-pager diff
+```
+
+Confirm the placeholders are gone and replaced with your values. A quick scan for any leftover
+placeholder:
+
+```bash
+git --no-pager grep -nEi 'contoso|onmicrosoft\.com|OWNER-PLACEHOLDER' -- ':!docs/adr' ':!CHANGELOG.md'
+```
+
+Commit when satisfied:
+
+```bash
+git add -A && git commit -m "chore(repo): tailor template for <your-tenant>"
+```
+
+## Step 5 — Wire up the deployment identity and secrets
+
+The repository authenticates to Azure from GitHub Actions using a **Microsoft Entra app + OIDC
+federated credential** — no stored client secret. Per
+[Authenticate to Azure from GitHub Actions by OpenID Connect](https://learn.microsoft.com/en-us/azure/developer/github/connect-from-azure-openid-connect).
+
+Follow [Getting started §1–§2](getting-started.md) for the exact `az ad app` commands. In short:
+
+1. Create the Entra app + service principal and add a federated credential whose subject is
+   `repo:<your-org>/<your-repo>:environment:<env>`.
+2. Grant it **Contributor** on your resource group (control plane) and the Microsoft Purview
+   data-plane roles **Collection Admin**, **Data Curator**, and **Data Source Administrator** at the
+   root collection — per
+   [Access control in Microsoft Purview](https://learn.microsoft.com/en-us/purview/data-gov-classic-permissions).
+3. In **Settings → Environments → `<env>`**, set secrets `AZURE_CLIENT_ID`, `AZURE_TENANT_ID`,
+   `AZURE_SUBSCRIPTION_ID` and variable `PURVIEW_ACCOUNT_NAME`.
+4. In **Settings → Secrets and variables → Actions → Variables**, set the repository variable
+   `OWNER_APPROVAL_LOGIN` to your GitHub login. The
+   [`pr-auto-merge.yml`](../.github/workflows/pr-auto-merge.yml) workflow only enables auto-merge
+   when the `owner-approved` label is applied by this login; if it is unset, auto-merge fails with a
+   configuration error. It is a repository variable (not environment-scoped) because that workflow
+   runs without an `environment:`. See
+   [Store information in variables](https://docs.github.com/en/actions/how-tos/write-workflows/choose-what-workflows-do/use-variables).
+
+> Never commit any of these values. They live only in GitHub secrets and in your local
+> `az account set` context.
+
+## Step 6 — Validate locally
+
+```bash
+# Control plane compiles
+az bicep build --file infra/main.bicep
+
+# Unit tests (no live tenant required)
+pwsh -File tests/Run-Pester.ps1
+```
+
+Both must pass before you deploy.
+
+## Step 7 — First deploy
+
+Run the workflows from the **Actions** tab (or follow [Getting started §4](getting-started.md)):
+
+1. **`deploy-infra`** — provisions / reconciles the `Microsoft.Purview/accounts` resource and its
+   dependencies. See [Microsoft.Purview/accounts (Bicep)](https://learn.microsoft.com/en-us/azure/templates/microsoft.purview/accounts).
+2. **`deploy-data-plane`** — applies the desired-state catalog content under `data-plane/`.
+
+After the first deploy, the ongoing per-feature lifecycle is agent-led
+(`@idea-intake` → `@artifact-resolver` → `@owner-approval`); populate
+[`docs/project-plan.md`](project-plan.md) as you adopt features.
+
+## References
+
+- **[Authenticate to Azure from GitHub Actions by OpenID Connect](https://learn.microsoft.com/en-us/azure/developer/github/connect-from-azure-openid-connect)**
+  Fetch date: 2026-06-21
+  > "Securely authenticate to Azure services from GitHub Actions workflows using Azure Login action with OpenID Connect (OIDC)."
+- **[Access control in the classic Microsoft Purview governance portal](https://learn.microsoft.com/en-us/purview/data-gov-classic-permissions)**
+  Fetch date: 2026-06-21
+  > "The Microsoft Purview governance portal uses Collections in the Microsoft Purview Data Map to organize and manage access across its sources, assets, and other artifacts."
+- [Creating a repository from a template](https://docs.github.com/en/repositories/creating-and-managing-repositories/creating-a-repository-from-a-template)
+- [Bicep parameter files](https://learn.microsoft.com/en-us/azure/azure-resource-manager/bicep/parameter-files)
+- [Microsoft.Purview/accounts (Bicep)](https://learn.microsoft.com/en-us/azure/templates/microsoft.purview/accounts)
+- [Custom agents in VS Code](https://code.visualstudio.com/docs/copilot/customization/custom-chat-modes)
+- [Getting started](getting-started.md) — detailed identity, secrets, and deploy walkthrough.
+
+  </script>
+  <!-- EMBEDDED-DOCS:END -->
+
   <!-- ============ Slide-in document reader ============ -->
   <div class="doc-overlay" id="docOverlay"></div>
   <aside class="doc-panel" id="docPanel" role="dialog" aria-modal="true" aria-label="Document reader">
@@ -805,6 +1444,24 @@
     function openPanel() { overlay.classList.add("open"); panel.classList.add("open"); document.body.classList.add("doc-open"); }
     function closePanel() { overlay.classList.remove("open"); panel.classList.remove("open"); document.body.classList.remove("doc-open"); }
 
+    function renderMarkdown(text, hash) {
+      bodyEl.innerHTML = md2html(text);
+      var h1 = bodyEl.querySelector("h1"); if (h1) titleEl.textContent = h1.textContent;
+      bodyEl.scrollTop = 0;
+      if (hash) { var el = bodyEl.querySelector("#" + (window.CSS && CSS.escape ? CSS.escape(hash) : hash)); if (el) el.scrollIntoView(); }
+    }
+    function embeddedDoc(url) {
+      var node = document.querySelector('script[type="text/markdown"][data-doc="' + shortPath(url) + '"]');
+      return node ? node.textContent : null;
+    }
+    function showFallback() {
+      bodyEl.innerHTML =
+        '<div class="doc-error"><p><strong>Couldn’t load this document.</strong></p>' +
+        "<p>No offline copy is embedded for this file. The live reader works when the page is served over HTTP " +
+        '— for example via <em>GitHub Pages</em>, or a local preview such as VS Code “Live Preview” or ' +
+        "<code>python -m http.server</code>.</p>" +
+        '<a class="btn btn-primary" href="' + currentDocUrl + '" target="_blank" rel="noopener">Open the file directly ↗</a></div>';
+    }
     function loadDoc(absUrl, title) {
       openPanel();
       currentDocUrl = absUrl.split("#")[0];
@@ -814,21 +1471,17 @@
       rawEl.href = currentDocUrl;
       bodyEl.innerHTML = '<div class="doc-loading"><span class="doc-spinner"></span>Loading ' + escapeHtml(shortPath(currentDocUrl)) + "…</div>";
       bodyEl.scrollTop = 0;
+      // Prefer the live file when served over HTTP so a published site stays fresh;
+      // fall back to the embedded offline snapshot when fetch is blocked (file://).
       fetch(currentDocUrl).then(function (res) {
         if (!res.ok) throw new Error("HTTP " + res.status);
         return res.text();
       }).then(function (text) {
-        bodyEl.innerHTML = md2html(text);
-        var h1 = bodyEl.querySelector("h1"); if (h1) titleEl.textContent = h1.textContent;
-        bodyEl.scrollTop = 0;
-        if (hash) { var el = bodyEl.querySelector("#" + (window.CSS && CSS.escape ? CSS.escape(hash) : hash)); if (el) el.scrollIntoView(); }
+        renderMarkdown(text, hash);
       }).catch(function () {
-        bodyEl.innerHTML =
-          '<div class="doc-error"><p><strong>Couldn’t render this document in-page.</strong></p>' +
-          "<p>Browsers block reading local files when this page is opened straight from disk (a <code>file://</code> URL). " +
-          "The in-page reader works when the page is served over HTTP — for example via <em>GitHub Pages</em>, or a local " +
-          'preview such as VS Code “Live Preview” or <code>python -m http.server</code>.</p>' +
-          '<a class="btn btn-primary" href="' + currentDocUrl + '" target="_blank" rel="noopener">Open the file directly ↗</a></div>';
+        var emb = embeddedDoc(currentDocUrl);
+        if (emb !== null) { renderMarkdown(emb, hash); }
+        else { showFallback(); }
       });
     }
 
