@@ -2,19 +2,65 @@ name: Idea Intake — Auto-add needs-review
 
 # Gated to the lab owner: `needs-review` signals owner-readiness for merge
 # and must not be auto-applied to issues filed by outside contributors.
-# See https://docs.github.com/en/actions/reference/contexts#github-context
+#
+# Owner identity is data-driven via the OWNER_APPROVAL_LOGIN repository
+# variable (Settings → Secrets and variables → Actions → Variables) — the same
+# variable pr-auto-merge.yml uses — so no owner login is hardcoded in source.
+# This is a tenant surface that no longer needs tailoring (ADR 0046).
+#
+# A two-job split keeps least privilege: the `gate` job runs with no write
+# permissions and only decides whether the actor is the owner; the
+# `label-new-issue` job holds `issues: write` and runs only when the gate says
+# so. github.event.issue.user.login flows through env: and is referenced as a
+# shell variable, keeping interpolation outside the shell-quoting boundary per
+# script-injection hardening.
+#
+# When OWNER_APPROVAL_LOGIN is unset (an un-onboarded copy, including this
+# template repo), the gate warns and skips rather than failing — this workflow
+# fires on every issue open, so a hard failure would litter the timeline.
+#
+# References:
+#   https://docs.github.com/en/actions/reference/contexts#github-context
+#   https://docs.github.com/en/actions/how-tos/write-workflows/choose-what-workflows-do/use-variables
+#   https://docs.github.com/en/actions/security-guides/security-hardening-for-github-actions#understanding-the-risk-of-script-injections
 
 on:
   issues:
     types: [opened]
 
-permissions:
-  issues: write
+permissions: {}
 
 jobs:
+  gate:
+    runs-on: ubuntu-latest
+    permissions: {}
+    outputs:
+      is_owner: ${{ steps.gate.outputs.is_owner }}
+    steps:
+      - name: Determine owner gate
+        id: gate
+        env:
+          ISSUE_AUTHOR_LOGIN: ${{ github.event.issue.user.login }}
+          OWNER_LOGIN: ${{ vars.OWNER_APPROVAL_LOGIN }}
+        run: |
+          if [ -z "$OWNER_LOGIN" ]; then
+            echo "::warning::The 'OWNER_APPROVAL_LOGIN' repository variable is not set, so needs-review auto-add is skipped. Set it under Settings → Secrets and variables → Actions → Variables to the lab owner's GitHub login."
+            echo "is_owner=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          if [ "$ISSUE_AUTHOR_LOGIN" != "$OWNER_LOGIN" ]; then
+            echo "::notice::Issue author '$ISSUE_AUTHOR_LOGIN' is not the lab owner ('$OWNER_LOGIN' per OWNER_APPROVAL_LOGIN); skipping needs-review auto-add."
+            echo "is_owner=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          echo "is_owner=true" >> "$GITHUB_OUTPUT"
+
   label-new-issue:
     runs-on: ubuntu-latest
-    if: github.event.issue.user.login == 'contoso'
+    needs: gate
+    if: needs.gate.outputs.is_owner == 'true'
+    permissions:
+      issues: write
     steps:
       - name: Ensure needs-review label exists
         env:

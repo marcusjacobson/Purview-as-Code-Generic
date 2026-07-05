@@ -78,7 +78,7 @@ Under **Settings → Secrets and variables → Actions**:
 - Variables (Environment: `lab`):
   - `PURVIEW_ACCOUNT_NAME` = `purview-contoso-lab` (or your actual account name)
 - Variables (Repository — not environment-scoped, because [`pr-auto-merge.yml`](../.github/workflows/pr-auto-merge.yml) runs without an `environment:`):
-  - `OWNER_APPROVAL_LOGIN` = your GitHub login (the lab owner). The auto-merge workflow only enables merge when the `owner-approved` label is applied by this login. Set under **Settings → Secrets and variables → Actions → Variables**. See [Store information in variables](https://docs.github.com/en/actions/how-tos/write-workflows/choose-what-workflows-do/use-variables).
+  - `OWNER_APPROVAL_LOGIN` = your GitHub login (the lab owner). Two workflows read it: [`pr-auto-merge.yml`](../.github/workflows/pr-auto-merge.yml) only enables merge when the `owner-approved` label is applied by this login, and [`idea-intake-autoadd.yml`](../.github/workflows/idea-intake-autoadd.yml) only auto-adds `needs-review` to issues you open. Set under **Settings → Secrets and variables → Actions → Variables**. See [Store information in variables](https://docs.github.com/en/actions/how-tos/write-workflows/choose-what-workflows-do/use-variables).
 
 Create the `lab` environment and the `kv-unlock` environment (Settings → Environments → New environment). The `kv-unlock` environment gates [`kv-temp-unlock.yml`](../.github/workflows/kv-temp-unlock.yml) independently and should carry its own required-reviewer protection rule per [ADR 0010 §3](adr/0010-automation-identity-subject-model.md).
 
