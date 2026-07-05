@@ -179,11 +179,12 @@ Only after explicit confirmation, apply the tailoring driven by
      (ownerSlug). The repo name `Purview-as-Code` in the header is not a tenant token; leave it.
    - **`.github/workflows/**`** — replace only the **functional** tenant values (missed pre-manifest,
      [ADR 0046](../../docs/adr/0046-tenant-placeholder-manifest.md)): the `KEY_VAULT_NAME:` env
-     default in `deploy-data-plane.yml` / `kv-temp-unlock.yml` / `validate-oidc-auth.yml`, the
-     `TENANT_DOMAIN:` env in `validate-oidc-auth.yml`, and the owner-login gate
-     `if: github.event.issue.user.login == 'contoso'` in `idea-intake-autoadd.yml`. The many other
-     `contoso` refs in workflows are cosmetic (issue-body prose, doc-link URLs, `--title` strings) —
-     update-optional, not deploy-breaking.
+     default in `deploy-data-plane.yml` / `kv-temp-unlock.yml` / `validate-oidc-auth.yml` and the
+     `TENANT_DOMAIN:` env in `validate-oidc-auth.yml`. The owner-login gate in
+     `idea-intake-autoadd.yml` is **no longer a tenant surface** — it reads the
+     `OWNER_APPROVAL_LOGIN` repository variable (the same variable `pr-auto-merge.yml` uses), so
+     there is nothing to replace. The many other `contoso` refs in workflows are cosmetic
+     (issue-body prose, doc-link URLs, `--title` strings) — update-optional, not deploy-breaking.
    - **`docs/getting-started.md`** — replace the org/repo in the OIDC federated-credential `subject`
      and the account name in the deploy examples. Keep the corrected **per-plane app model** and the
      **`:environment:<env>` subject shape** (per [ADR 0010](../../docs/adr/0010-automation-identity-subject-model.md)):
@@ -214,37 +215,45 @@ Run and paste the output of:
 az bicep build --file infra/main.bicep
 yamllint infra/parameters/lab.yaml data-plane/
 
-# Residual-placeholder scan — exclude the manifest's `intentionalSamples` pathspecs so the
-# ~150 files that legitimately keep `contoso`/`fabrikam`/`adatum` (sample data, rule docs,
-# scripts .EXAMPLE blocks, template onboarding guides, tests, historical issue links) do NOT
-# flood the result. Any remaining match is a genuine missed tenant surface (or a value the
-# owner chose to keep). MIXED surfaces (copilot-instructions.md, README.md, getting-started.md)
-# still show their convention prose — that is expected, not a miss.
-git --no-pager grep -nEi 'contoso|onmicrosoft\.com|OWNER-PLACEHOLDER' -- `
-  ':!docs/adr' ':!CHANGELOG.md' ':!data-plane' ':!tests' ':!docs/runbooks' ':!docs/solutions' `
-  ':!docs/governance' ':!docs/architecture.md' ':!docs/scripts-reference.md' `
-  ':!docs/tenant-onboarding.md' ':!docs/kickoff-guide.md' ':!.github/instructions' `
-  ':!.github/prompts' ':!.github/skills' ':!.github/copilot-automations' ':!.github/agents' `
-  ':!.squad' ':!index.html' ':!scripts' ':!.github/workflows'
-
-# Functional-workflow scan — workflows are excluded above (cosmetic prose dominates), so verify
-# their FEW functional tenant values here. Zero matches expected after tailoring.
-git --no-pager grep -nE 'KEY_VAULT_NAME:.*contoso|TENANT_DOMAIN:.*contoso|user\.login == .contoso' -- .github/workflows/
+# Residual + functional-workflow placeholder scans. Do NOT hand-type the exclude
+# list — generate the exact commands from tenant-placeholders.yaml so they can
+# never drift from the manifest (ADR 0046). The generator reads `residualScan`,
+# `functionalWorkflowScan`, and `intentionalSamples` and prints the ready-to-run
+# `git grep` invocations; pipe each into Invoke-Expression to run it.
+./scripts/Get-TenantResidualScanCommand.ps1 -Kind Residual | Invoke-Expression
+./scripts/Get-TenantResidualScanCommand.ps1 -Kind Functional | Invoke-Expression
 
 # Secrets scan — scope to the tailoring DIFF (what you just wrote), per
 # .github/instructions/pre-commit.instructions.md, NOT the whole tree.
 git --no-pager diff | Select-String -Pattern 'password|secret|key|token|pat|client[_-]secret|connectionstring'
 ```
 
+What the two scans mean:
+
+- **Residual scan** — the broad `contoso` / `onmicrosoft.com` / `OWNER-PLACEHOLDER` sweep
+  excluding the manifest's `intentionalSamples` pathspecs (the ~150 files that legitimately
+  keep `contoso`/`fabrikam`/`adatum` — sample data, rule docs, scripts `.EXAMPLE` blocks,
+  template onboarding guides, tests, historical issue links). Any remaining match is a genuine
+  missed tenant surface (or a value the owner chose to keep). MIXED surfaces
+  (`copilot-instructions.md`, `README.md`, `getting-started.md`) still show their convention
+  prose — that is expected, not a miss.
+- **Functional-workflow scan** — the FEW functional tenant values in `.github/workflows/`
+  (`KEY_VAULT_NAME` / `TENANT_DOMAIN` `env:` defaults). Workflows are excluded from the broad
+  scan because cosmetic prose dominates. Zero matches expected after tailoring. The owner-login
+  gate in `idea-intake-autoadd.yml` is NOT scanned any more — it reads the
+  `OWNER_APPROVAL_LOGIN` repository variable, so there is no literal to replace.
+
 Notes:
 
-- **Keep the residual exclude list in sync with the manifest's `intentionalSamples`.** If the
-  manifest changes, update this command (or generate the pathspecs from it).
-- **Secrets-scan false positives are expected only if you widen the scope.** The diff-scoped form
-  above only inspects the lines you changed. If you ever run the broad regex against the whole tree,
-  it will match the literal words `key` and (via `pat`) `pattern`/`path` in `data-plane/**` schema
-  comments — those are **not** secrets. The scan's purpose is "did the tailoring introduce a
-  secret?", which the diff-scoped form answers precisely.
+- **The scan commands are single-sourced from [`tenant-placeholders.yaml`](tenant-placeholders.yaml).**
+  If you change the manifest's `intentionalSamples`, `residualScan`, or `functionalWorkflowScan`,
+  the generator picks it up automatically — never re-embed the pathspec list in this file.
+- **If the generator script cannot run** (a minimal harness with no `pwsh` or no
+  `powershell-yaml`), do not fall back to a hand-typed list. Open
+  [`tenant-placeholders.yaml`](tenant-placeholders.yaml) and construct the two `git grep`
+  commands directly from `residualScan.pattern`, the `intentionalSamples` pathspecs (as
+  `:!<spec>` excludes), and `functionalWorkflowScan.pattern` / `functionalWorkflowScan.pathspec`.
+  Report that the generator was unavailable — do **not** claim the scan passed.
 - **If `az`, `yamllint`, or `Select-String` is unavailable** (e.g. a minimal harness where the
   validation gate cannot run), say so explicitly and **skip that gate rather than guessing** —
   never fabricate a pass. Tell the owner which gate was skipped so they can run it before deploy.

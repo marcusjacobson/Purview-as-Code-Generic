@@ -102,12 +102,19 @@ and never deploy. Subscription and tenant IDs belong in GitHub secrets, not in s
 git --no-pager diff
 ```
 
-Confirm the placeholders are gone and replaced with your values. A quick scan for any leftover
-placeholder:
+Confirm the placeholders are gone and replaced with your values. To scan for any leftover
+placeholder without the sample-data noise, generate the exact scan command from the tenant
+manifest (it excludes the intentional-sample paths per [ADR 0046](adr/0046-tenant-placeholder-manifest.md))
+and run it:
 
-```bash
-git --no-pager grep -nEi 'contoso|onmicrosoft\.com|OWNER-PLACEHOLDER' -- ':!docs/adr' ':!CHANGELOG.md'
+```pwsh
+./scripts/Get-TenantResidualScanCommand.ps1 -Kind Residual | Invoke-Expression
+./scripts/Get-TenantResidualScanCommand.ps1 -Kind Functional | Invoke-Expression
 ```
+
+Remaining matches in the MIXED surfaces (`copilot-instructions.md`, `README.md`,
+`getting-started.md`) are expected convention prose, not misses — see the `@operator-tenant`
+Step 6 notes for how to triage each line.
 
 Commit when satisfied:
 
@@ -132,11 +139,13 @@ Follow [Getting started §1–§2](getting-started.md) for the exact `az ad app`
 3. In **Settings → Environments → `<env>`**, set secrets `AZURE_CLIENT_ID`, `AZURE_TENANT_ID`,
    `AZURE_SUBSCRIPTION_ID` and variable `PURVIEW_ACCOUNT_NAME`.
 4. In **Settings → Secrets and variables → Actions → Variables**, set the repository variable
-   `OWNER_APPROVAL_LOGIN` to your GitHub login. The
+   `OWNER_APPROVAL_LOGIN` to your GitHub login. Two workflows read it: the
    [`pr-auto-merge.yml`](../.github/workflows/pr-auto-merge.yml) workflow only enables auto-merge
-   when the `owner-approved` label is applied by this login; if it is unset, auto-merge fails with a
-   configuration error. It is a repository variable (not environment-scoped) because that workflow
-   runs without an `environment:`. See
+   when the `owner-approved` label is applied by this login (if it is unset, auto-merge fails with a
+   configuration error), and [`idea-intake-autoadd.yml`](../.github/workflows/idea-intake-autoadd.yml)
+   only auto-adds the `needs-review` label to issues you open (if it is unset, that workflow warns
+   and skips rather than failing). It is a repository variable (not environment-scoped) because
+   those workflows run without an `environment:`. See
    [Store information in variables](https://docs.github.com/en/actions/how-tos/write-workflows/choose-what-workflows-do/use-variables).
 
 > Never commit any of these values. They live only in GitHub secrets and in your local
