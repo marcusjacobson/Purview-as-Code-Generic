@@ -999,7 +999,7 @@ Under **Settings → Secrets and variables → Actions**:
 - Variables (Environment: `lab`):
   - `PURVIEW_ACCOUNT_NAME` = `purview-contoso-lab` (or your actual account name)
 - Variables (Repository — not environment-scoped, because [`pr-auto-merge.yml`](../.github/workflows/pr-auto-merge.yml) runs without an `environment:`):
-  - `OWNER_APPROVAL_LOGIN` = your GitHub login (the lab owner). The auto-merge workflow only enables merge when the `owner-approved` label is applied by this login. Set under **Settings → Secrets and variables → Actions → Variables**. See [Store information in variables](https://docs.github.com/en/actions/how-tos/write-workflows/choose-what-workflows-do/use-variables).
+  - `OWNER_APPROVAL_LOGIN` = your GitHub login (the lab owner). Two workflows read it: [`pr-auto-merge.yml`](../.github/workflows/pr-auto-merge.yml) only enables merge when the `owner-approved` label is applied by this login, and [`idea-intake-autoadd.yml`](../.github/workflows/idea-intake-autoadd.yml) only auto-adds `needs-review` to issues you open. Set under **Settings → Secrets and variables → Actions → Variables**. See [Store information in variables](https://docs.github.com/en/actions/how-tos/write-workflows/choose-what-workflows-do/use-variables).
 
 Create the `lab` environment and the `kv-unlock` environment (Settings → Environments → New environment). The `kv-unlock` environment gates [`kv-temp-unlock.yml`](../.github/workflows/kv-temp-unlock.yml) independently and should carry its own required-reviewer protection rule per [ADR 0010 §3](adr/0010-automation-identity-subject-model.md).
 
@@ -1114,7 +1114,8 @@ the diff and commit it on a branch.
 Authenticate GitHub Actions to Azure with a Microsoft Entra app + OIDC federated credential — no
 stored client secret. Set the environment secrets (`AZURE_CLIENT_ID`, `AZURE_TENANT_ID`,
 `AZURE_SUBSCRIPTION_ID`), the `PURVIEW_ACCOUNT_NAME` variable, and the `OWNER_APPROVAL_LOGIN`
-repository variable (your GitHub login — the auto-merge gate reads it). Exact commands:
+repository variable (your GitHub login — both the auto-merge gate and the idea-intake
+`needs-review` auto-add read it). Exact commands:
 [Getting started §1–§2](getting-started.md). Grounding:
 [Use Azure Login with OpenID Connect](https://learn.microsoft.com/en-us/azure/developer/github/connect-from-azure-openid-connect),
 [Store information in variables](https://docs.github.com/en/actions/how-tos/write-workflows/choose-what-workflows-do/use-variables).
@@ -1288,12 +1289,19 @@ and never deploy. Subscription and tenant IDs belong in GitHub secrets, not in s
 git --no-pager diff
 ```
 
-Confirm the placeholders are gone and replaced with your values. A quick scan for any leftover
-placeholder:
+Confirm the placeholders are gone and replaced with your values. To scan for any leftover
+placeholder without the sample-data noise, generate the exact scan command from the tenant
+manifest (it excludes the intentional-sample paths per [ADR 0046](adr/0046-tenant-placeholder-manifest.md))
+and run it:
 
-```bash
-git --no-pager grep -nEi 'contoso|onmicrosoft\.com|OWNER-PLACEHOLDER' -- ':!docs/adr' ':!CHANGELOG.md'
+```pwsh
+./scripts/Get-TenantResidualScanCommand.ps1 -Kind Residual | Invoke-Expression
+./scripts/Get-TenantResidualScanCommand.ps1 -Kind Functional | Invoke-Expression
 ```
+
+Remaining matches in the MIXED surfaces (`copilot-instructions.md`, `README.md`,
+`getting-started.md`) are expected convention prose, not misses — see the `@operator-tenant`
+Step 6 notes for how to triage each line.
 
 Commit when satisfied:
 
@@ -1318,11 +1326,13 @@ Follow [Getting started §1–§2](getting-started.md) for the exact `az ad app`
 3. In **Settings → Environments → `<env>`**, set secrets `AZURE_CLIENT_ID`, `AZURE_TENANT_ID`,
    `AZURE_SUBSCRIPTION_ID` and variable `PURVIEW_ACCOUNT_NAME`.
 4. In **Settings → Secrets and variables → Actions → Variables**, set the repository variable
-   `OWNER_APPROVAL_LOGIN` to your GitHub login. The
+   `OWNER_APPROVAL_LOGIN` to your GitHub login. Two workflows read it: the
    [`pr-auto-merge.yml`](../.github/workflows/pr-auto-merge.yml) workflow only enables auto-merge
-   when the `owner-approved` label is applied by this login; if it is unset, auto-merge fails with a
-   configuration error. It is a repository variable (not environment-scoped) because that workflow
-   runs without an `environment:`. See
+   when the `owner-approved` label is applied by this login (if it is unset, auto-merge fails with a
+   configuration error), and [`idea-intake-autoadd.yml`](../.github/workflows/idea-intake-autoadd.yml)
+   only auto-adds the `needs-review` label to issues you open (if it is unset, that workflow warns
+   and skips rather than failing). It is a repository variable (not environment-scoped) because
+   those workflows run without an `environment:`. See
    [Store information in variables](https://docs.github.com/en/actions/how-tos/write-workflows/choose-what-workflows-do/use-variables).
 
 > Never commit any of these values. They live only in GitHub secrets and in your local

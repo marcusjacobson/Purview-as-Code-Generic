@@ -18,6 +18,10 @@ To add an entry:
 
 ## 2026-07-05
 
+### Changed
+
+- **instructions:** single-source the `@operator-tenant` Step 6 placeholder scans from `tenant-placeholders.yaml` — promote `residualScan` / `functionalWorkflowScan` to structured fields (`schemaVersion` 2), add the `Get-TenantResidualScanCommand.ps1` generator and a manifest-based fallback in the agent body, and drop the removed owner-login clause from the functional scan (#29)
+
 ### Fixed
 
 - **scripts:** `Test-KickoffGuard.ps1` exits `0` on a passing guard instead of leaking a non-zero `$LASTEXITCODE` from the last internal `git` call, restoring exit-code gating; add Pester coverage of the exit-code contract (#27)
@@ -28,6 +32,14 @@ To add an entry:
 
 - **docs:** add a "Teardown / re-run" section to the kickoff guide — rebuilding requires manual GitHub-UI repo deletion because the automation token lacks the `delete_repo` scope by design (#27)
 - **docs:** record the prompt-decoupling and closed-tenant-surface decisions in ADR 0046 (#27)
+
+### Tests
+
+- **scripts:** add drift-guard Pester coverage for `Get-TenantResidualScanCommand.ps1`, asserting the generated residual / functional scans stay faithful to `tenant-placeholders.yaml` (#29)
+
+### CI/CD
+
+- **ci:** make the `idea-intake-autoadd.yml` needs-review owner gate data-driven via the `OWNER_APPROVAL_LOGIN` repository variable (two-job least-privilege split; warns and skips on unset instead of failing), removing the hardcoded owner login (#29)
 
 ## 2026-07-04
 
