@@ -185,7 +185,9 @@ not guess.** Ask the owner (Pattern-D, single-select) which situation applies, a
 - (c) **not yet created.**
 
 **Optional confirmation for (a):** offer to run the read-only, opt-in Unified Catalog
-tenant-reachability probe:
+tenant-reachability probe. It fires whenever no *confirmed* governance account is found — including
+when ARM enumeration surfaces only a metering resource, since a metering resource is itself an ARM
+`Microsoft.Purview/accounts` hit and would otherwise silently suppress the probe:
 
 ```pwsh
 ./scripts/Find-PurviewAccount.ps1 -ProbeUnifiedCatalog

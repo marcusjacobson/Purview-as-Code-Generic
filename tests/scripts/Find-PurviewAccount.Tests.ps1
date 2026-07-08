@@ -496,14 +496,22 @@ Describe 'Find-PurviewAccount (Get-PurviewAccountDiscovery orchestration)' {
         $result[0].Note           | Should -Match 'NEVER be written to purviewAccountName'
     }
 
-    It 'does not run the probe when ARM discovers a governance account, even with -ProbeUnifiedCatalog set' {
-        $probeCalled = $false
-        function Invoke-PurviewUnifiedCatalogProbe { $script:probeCalled = $true; $script:StubProbeResult }
+    It 'runs the probe and appends its diagnostic even when ARM discovers pending-confirmation accounts (for example, a metering resource)' {
+        # Regression guard: a pay-as-you-go metering resource is itself an ARM
+        # Microsoft.Purview/accounts hit, so $results.Count is never 0 in that
+        # scenario. Gating the probe on Count -eq 0 alone would silently skip
+        # it in exactly the tenant this probe exists to see past. Every result
+        # from ConvertTo-PurviewAccountResult is 'RequiresOwnerConfirmation'
+        # (there is no other classification), so the probe must still fire and
+        # its diagnostic must be appended alongside the pending-confirmation
+        # ARM hits, not returned instead of them.
+        $script:StubProbeResult = [pscustomobject]@{ TokenAcquired = $true; Succeeded = $true; StatusCode = 200 }
 
         $result = @(Get-PurviewAccountDiscovery -ProbeUnifiedCatalog -InformationAction SilentlyContinue)
 
-        $result.Count | Should -Be 2
-        $probeCalled | Should -Be $false
+        $result.Count | Should -Be 3
+        ($result | Where-Object { $_.Classification -eq 'RequiresOwnerConfirmation' }).Count | Should -Be 2
+        ($result | Where-Object { $_.Classification -eq 'UnifiedCatalogTenantReachable' }).Count | Should -Be 1
     }
 
     It 'surfaces UnifiedCatalogProbeSkipped when the probe cannot acquire a token' {

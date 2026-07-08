@@ -80,30 +80,37 @@
 
 .PARAMETER ProbeUnifiedCatalog
     Optional. OFF by default — no change to the existing ARM-only path. When
-    set, and only after ARM enumeration finds no Microsoft.Purview/accounts
-    resource (across every visible subscription, ignoring -Name and
-    -SubscriptionId), runs a single read-only GET against the Unified Catalog
-    preview data-plane tenant-scoped `businessdomains` enumerate endpoint
+    set, and only when ARM enumeration finds no *confirmed* governance account
+    (across every visible subscription, ignoring -Name and -SubscriptionId),
+    runs a single read-only GET against the Unified Catalog preview data-plane
+    tenant-scoped `businessdomains` enumerate endpoint
     (https://learn.microsoft.com/en-us/rest/api/purview/purview-unified-catalog/business-domain/enumerate).
-    An HTTP 200 means the tenant exposes a reachable unified data plane — a
-    diagnostic reachability signal for ADR 0048 §Decision item 4 scenario (a),
-    not proof that a specific account is unified, not proof that no classic
-    account exists, and not the ADR 0047 reconcile-time routing decision. The
-    result is emitted as a single diagnostic object whose Name is the literal
-    string 'unified-catalog (tenant default)'; this value must never be
-    written to `purviewAccountName`. Never prints the bearer token; redacts
-    `az` stderr.
+    "No confirmed governance account" includes both an empty ARM result and a
+    result made up entirely of `RequiresOwnerConfirmation` hits (for example, a
+    pay-as-you-go metering resource) — a metering resource is itself an ARM
+    Microsoft.Purview/accounts object, so gating on an empty result alone would
+    silently skip the probe in exactly the metered-tenant scenario it exists to
+    see past. An HTTP 200 means the tenant exposes a reachable unified data
+    plane — a diagnostic reachability signal for ADR 0048 §Decision item 4
+    scenario (a), not proof that a specific account is unified, not proof that
+    no classic account exists, and not the ADR 0047 reconcile-time routing
+    decision. The probe result is emitted as an additional diagnostic object
+    alongside any ARM results, whose Name is the literal string
+    'unified-catalog (tenant default)'; this value must never be written to
+    `purviewAccountName`. Never prints the bearer token; redacts `az` stderr.
 
 .OUTPUTS
     [pscustomobject] with properties: Name, ResourceGroup, Location, Sku,
     SubscriptionName, SubscriptionId, Classification, Note. Zero objects are
     emitted when nothing is discovered and -ProbeUnifiedCatalog is not set.
     SubscriptionId is the zero-GUID placeholder unless -IncludeSubscriptionId
-    is set. When -ProbeUnifiedCatalog is set and ARM enumeration finds
-    nothing, a single diagnostic object is emitted instead of an empty array;
-    its Classification is one of UnifiedCatalogTenantReachable,
-    UnifiedCatalogUnauthorized, UnifiedCatalogProbeIndeterminate,
-    UnifiedCatalogUnreachable, or UnifiedCatalogProbeSkipped.
+    is set. When -ProbeUnifiedCatalog is set and ARM enumeration finds no
+    confirmed governance account (an empty result, or a result made up
+    entirely of `RequiresOwnerConfirmation` hits such as a metering resource),
+    a diagnostic object is appended to the returned array; its Classification
+    is one of UnifiedCatalogTenantReachable, UnifiedCatalogUnauthorized,
+    UnifiedCatalogProbeIndeterminate, UnifiedCatalogUnreachable, or
+    UnifiedCatalogProbeSkipped.
 
 .NOTES
     Identifier redaction: per ADR 0048 §Decision item 2 and the "Environment
@@ -130,9 +137,11 @@
 .EXAMPLE
     ./scripts/Find-PurviewAccount.ps1 -ProbeUnifiedCatalog
 
-    When no Microsoft.Purview/accounts resource is discovered in ARM, also run
-    the opt-in, read-only Unified Catalog tenant-reachability probe and return
-    its diagnostic classification instead of an empty array.
+    When ARM enumeration finds no confirmed governance account — nothing at
+    all, or only pay-as-you-go metering resources still pending owner
+    confirmation — also run the opt-in, read-only Unified Catalog
+    tenant-reachability probe and append its diagnostic classification to the
+    result.
 #>
 [CmdletBinding()]
 [OutputType([pscustomobject])]
@@ -449,9 +458,24 @@ function Get-PurviewAccountDiscovery {
         $results = @($results | Where-Object { $_.Name -eq $Name })
     }
 
-    if ($results.Count -eq 0) {
+    # A metering-only hit still shows up as an ARM result (Classification =
+    # 'RequiresOwnerConfirmation'), so gating the probe on $results.Count -eq 0
+    # alone would silently skip it in the exact PAYG-metered-tenant scenario the
+    # probe exists to see past. Gate on "no *confirmed* governance account"
+    # instead — i.e. every result still needs owner confirmation. Today that is
+    # every result, since ConvertTo-PurviewAccountResult never emits any other
+    # classification; the guard is written this way so a future confirmed
+    # classification would correctly suppress the probe without a code change.
+    $hasConfirmedGovernanceAccount = @($results | Where-Object { $_.Classification -ne 'RequiresOwnerConfirmation' }).Count -gt 0
+
+    if (-not $hasConfirmedGovernanceAccount) {
         $scope = if ($Name) { "matching name '$Name'" } else { 'in any visible subscription' }
-        Write-Information "No Microsoft.Purview/accounts resource found $scope across $($subscriptions.Count) visible subscription(s). This is not an error (ADR 0048). The governance target may be: (a) the tenant-level Unified Catalog at purview.microsoft.com, which is not an ARM resource; (b) a classic account in a subscription or tenant this sign-in cannot see; or (c) not yet created. Confirm with the lab owner before writing purviewAccountName." -InformationAction Continue
+
+        if ($results.Count -eq 0) {
+            Write-Information "No Microsoft.Purview/accounts resource found $scope across $($subscriptions.Count) visible subscription(s). This is not an error (ADR 0048). The governance target may be: (a) the tenant-level Unified Catalog at purview.microsoft.com, which is not an ARM resource; (b) a classic account in a subscription or tenant this sign-in cannot see; or (c) not yet created. Confirm with the lab owner before writing purviewAccountName." -InformationAction Continue
+        } else {
+            Write-Information "Discovered $($results.Count) Microsoft.Purview/accounts resource(s) $scope, all pending owner confirmation (for example, a pay-as-you-go metering resource, which is NOT a governance target). No confirmed governance account was found (ADR 0048)." -InformationAction Continue
+        }
 
         if ($ProbeUnifiedCatalog) {
             Write-Verbose 'Running opt-in Unified Catalog tenant-reachability probe (read-only; ignores -Name and -SubscriptionId).'
@@ -459,10 +483,10 @@ function Get-PurviewAccountDiscovery {
             $classification = Get-PurviewUnifiedCatalogClassification -TokenAcquired $probe.TokenAcquired -Succeeded $probe.Succeeded -StatusCode $probe.StatusCode
             $diagnostic = ConvertTo-PurviewUnifiedCatalogDiagnostic -Classification $classification
             Write-Information "Unified Catalog tenant-reachability probe result: $classification. $($diagnostic.Note)" -InformationAction Continue
-            return @($diagnostic)
+            return @($results) + @($diagnostic)
         }
 
-        return @()
+        return $results
     }
 
     Write-Information "Discovered $($results.Count) Microsoft.Purview/accounts resource(s). Each requires owner confirmation: a pay-as-you-go metering resource is NOT a governance target, and classic-vs-unified account type must be confirmed separately (ADR 0048)." -InformationAction Continue
