@@ -572,8 +572,13 @@ function Get-ReconciliationPlan {
     $report = @()
     $plan = @()
     $orphans = @()
-    $desiredByKey = @{}
-    $tenantByKey = @{}
+    # Ordinal (case-sensitive) comparer: the default @{} literal is
+    # case-insensitive for string keys, which would collide two desired/
+    # tenant items whose names differ only by case (e.g. "Finance" vs
+    # "finance") and cause a false NoChange/Update instead of a distinct
+    # Create + orphan pair.
+    $desiredByKey = [System.Collections.Generic.Dictionary[string, object]]::new([System.StringComparer]::Ordinal)
+    $tenantByKey = [System.Collections.Generic.Dictionary[string, object]]::new([System.StringComparer]::Ordinal)
 
     foreach ($desired in @($DesiredItems)) {
         $key = [string](& $DesiredKeySelector $desired)
