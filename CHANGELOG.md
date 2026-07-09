@@ -20,8 +20,13 @@ To add an entry:
 
 ### Added
 
+- **prompts:** add `/deploy-unified` prompt for the Unified Catalog track — account-shape gate via `Get-PurviewAccountShape.ps1`, first-run export-first check, then a concepts pass and a grant/revoke-aware policies pass, each its own `-WhatIf` -> confirm -> apply cycle (ADR 0047 item e) (#51)
 - **scripts:** add `Get-PurviewAccountShape.ps1` for read-only classic-vs-unified account-shape detection, plus Pester coverage and Unified Catalog guide updates (ADR 0047 item d) (#49)
 - **scripts:** add `Deploy-UnifiedCatalogPolicies.ps1` with grant/revoke-aware gating for Unified Catalog data-access policies, plus tests and guide updates (#47)
+
+### Documentation
+
+- **prompts:** update `/discover-purview-account` Step 4/5 to route a confirmed unified account to `/deploy-unified` instead of stopping, and to mention the shipped `Get-PurviewAccountShape.ps1` probe as corroboration for the owner-confirmed classic-vs-unified determination (#51)
 
 ## 2026-07-08
 
