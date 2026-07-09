@@ -1,14 +1,15 @@
 ---
-description: "Read-only ADR 0048 discovery-and-confirmation gate for the Purview account named in infra/parameters/lab.yaml: enumerate, classify, and stop before deploy if the target is unconfirmed, a metering decoy, or unified."
+description: "Read-only ADR 0048 discovery-and-confirmation gate for the Purview account named in infra/parameters/lab.yaml: enumerate, classify as classic or unified, and route to /deploy-datamap or /deploy-unified, or stop if the target is unconfirmed or a metering decoy."
 mode: agent
 ---
 
 # Discover Purview account (ADR 0048 deploy-time gate)
 
-Run this on demand — and as a `/deploy-datamap` precondition — to confirm that the
-`purviewAccountName` in [`infra/parameters/lab.yaml`](../../infra/parameters/lab.yaml) resolves to a
-**confirmed classic governance account** before [`scripts/Connect-Purview.ps1`](../../scripts/Connect-Purview.ps1)
-and the `Deploy-*.ps1` reconcilers run against it. It implements the read-only discovery-and-confirmation
+Run this on demand — and as a `/deploy-datamap` or `/deploy-unified` precondition — to confirm that
+the `purviewAccountName` in [`infra/parameters/lab.yaml`](../../infra/parameters/lab.yaml) resolves
+to a **confirmed governance account** (classic or unified) before
+[`scripts/Connect-Purview.ps1`](../../scripts/Connect-Purview.ps1) or `scripts/Get-PurviewAccountShape.ps1`
+and their downstream reconcilers run against it. It implements the read-only discovery-and-confirmation
 gate ratified by [ADR 0048](../../docs/adr/0048-purview-account-discovery-gate.md), applied at deploy
 time rather than tailoring time (the tailoring-time gate is `@operator-tenant` Step 1a).
 
@@ -124,15 +125,24 @@ Once the target is identified, record whether it is **classic** or **unified** a
 - **Classic** (answers on the Atlas Data Map host `{account}.purview.azure.com`) → the shipped `Deploy-*.ps1`
   reconcilers and the [`/deploy-datamap`](deploy-datamap.prompt.md) export-first onboarding apply. This gate
   passes only for a **confirmed classic governance account**.
-- **Unified** (tenant-level, or a new account exposing only the unified data plane) → **stop.** Flag that classic
-  `Deploy-*.ps1` onboarding is blocked pending the
-  [ADR 0047](../../docs/adr/0047-unified-catalog-preview-api-coexistence.md) unified reconcilers, and do not imply
-  the `/deploy-datamap` export-first flow will work against it.
+- **Unified** (tenant-level, or an account exposing only the unified data plane) → route to
+  [`/deploy-unified`](deploy-unified.prompt.md) ([ADR 0047](../../docs/adr/0047-unified-catalog-preview-api-coexistence.md)),
+  which re-confirms the shape with `Get-PurviewAccountShape.ps1` before running the unified reconcilers. Do not
+  imply the classic `/deploy-datamap` export-first flow will work against a unified-only account.
 
-Learn documents no procedure for programmatically detecting classic vs unified as of 2026-07-06, so this is an
-**owner-confirmed** determination (or, later, probe-assisted once the ADR 0047 reconcile-time account-shape probe
-ships) — never inferred from a host string
-([ADR 0048](../../docs/adr/0048-purview-account-discovery-gate.md) §Decision item 5).
+Learn documents no procedure for programmatically detecting classic vs unified as of 2026-07-06, so this remains
+an **owner-confirmed** determination — never inferred from a host string
+([ADR 0048](../../docs/adr/0048-purview-account-discovery-gate.md) §Decision item 5). The ADR 0047 reconcile-time
+account-shape probe has since shipped and may be run to **corroborate** the owner's answer, the same way the
+Step 3 tenant-reachability probe corroborates rather than replaces confirmation:
+
+```pwsh
+./scripts/Get-PurviewAccountShape.ps1 -AccountName <purviewAccountName>
+```
+
+Its `Shape` result (`Classic`, `Unified`, `Ambiguous`, or fail-closed `Indeterminate`) is account-scoped, unlike
+the tenant-scoped Step 3 probe. Treat `Ambiguous` and `Indeterminate` as inconclusive — do not let either result
+silently decide the routing in place of the owner's confirmation.
 
 ## Step 5 — Report the outcome and stop when unconfirmed
 
@@ -143,7 +153,7 @@ Report the ADR 0048 outcome-matrix result for the candidate name
 |---|---|---|
 | Confirmed classic governance account | **Pass** — safe to proceed to `/deploy-datamap` | Continue with classic `Deploy-*.ps1` export-first onboarding |
 | Confirmed classic account in a sub/tenant the sign-in can't enumerate | **Stop** | The deploy identity must be able to reach that subscription/tenant before onboarding; re-run this gate once it can |
-| Confirmed unified (tenant-level, or unified-only account) | **Stop** | Classic `Deploy-*.ps1` onboarding is blocked pending the ADR 0047 unified reconcilers |
+| Confirmed unified (tenant-level, or unified-only account) | **Pass** — proceed to `/deploy-unified` | Continue with the unified track's own account-shape gate and export-first onboarding |
 | Only a pay-as-you-go metering resource discovered | **Stop** | Never select the meter as `purviewAccountName`; find the governance account |
 | Not yet created | **Stop** | Create the account, then re-run this gate |
 
