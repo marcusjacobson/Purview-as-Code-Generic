@@ -941,8 +941,17 @@ if ($mode -eq 'Apply' -or $mode -eq 'Verify') {
             Write-Error ("Auto-label policy '{0}' is missing the required 'applyLabel' field (composite key '<parent>/<displayName>' for sublabels, bare '<displayName>' for top-level). Reference: docs/adr/0016-auto-label-policy-shape.md." -f $e.name)
             return
         }
-        if (-not $e.ContainsKey('exchangeLocation') -or -not $e.exchangeLocation -or @($e.exchangeLocation).Count -eq 0) {
-            Write-Error ("Auto-label policy '{0}' is missing the required 'exchangeLocation' field. Reference: https://learn.microsoft.com/en-us/powershell/module/exchangepowershell/new-autosensitivitylabelpolicy" -f $e.name)
+        # ADR 0016 section 12 -- require the exchangeLocation key to be
+        # PRESENT but allow an empty array. A SharePoint/OneDrive-only
+        # auto-label policy legitimately exports as `exchangeLocation: []`;
+        # treating [] as "missing" here would error before diffing and
+        # break even a NoChange reconverge. The sibling
+        # Deploy-LabelPolicies.ps1 has no exchangeLocation guard at all --
+        # that is the reference shape. Empty-vs-populated location writes
+        # are gated in the Create/Update phases below (empty -> warn +
+        # omit/skip), never cleared silently.
+        if (-not $e.ContainsKey('exchangeLocation')) {
+            Write-Error ("Auto-label policy '{0}' is missing the required 'exchangeLocation' key. A SharePoint/OneDrive-only policy sets 'exchangeLocation: []'; the key must be present but may be an empty array. Reference: docs/adr/0016-auto-label-policy-shape.md section 12." -f $e.name)
             return
         }
         if ($e.ContainsKey('advancedSettings') -and $e.advancedSettings -and $e.advancedSettings.Keys.Count -gt 0) {
@@ -1200,41 +1209,46 @@ try {
         $allLabels = @(Get-Label -ErrorAction Stop)
         $guidToKey = ConvertTo-LabelCompositeKey -Labels $allLabels
 
-        $policyExport = New-Object 'System.Collections.Generic.List[System.Collections.Specialized.OrderedDictionary]'
-        foreach ($p in $allPolicies | Sort-Object Name) {
-            $h = ConvertTo-TenantPolicyHash -Policy $p -TenantLabels $allLabels
-            $entry = [ordered]@{}
-            $entry['name'] = $h.name
-            $entry['mode'] = $h.mode
-            $entry['applyLabel'] = if ($h.applyLabel -and $guidToKey.ContainsKey($h.applyLabel)) {
-                $guidToKey[$h.applyLabel]
-            }
-            else { $h.applyLabel }
-            $entry['exchangeLocation'] = @($h.exchangeLocation | Sort-Object)
-            $advanced = [ordered]@{}
-            foreach ($k in @($h.advancedSettings.Keys | Sort-Object)) {
-                $advanced[$k] = $h.advancedSettings[$k]
-            }
-            $entry['advancedSettings'] = $advanced
-            $policyExport.Add($entry)
-        }
-
         # Build policy-GUID->name map so rule export and workload
         # normalization can render the foreign key with the friendly
-        # name (not the immutable GUID).
+        # name (not the immutable GUID), and so the policy-skip pass
+        # below can match a surviving rule's resolved policy name.
         $exportPolicyGuidToName = @{}
         foreach ($p in $allPolicies) {
             if ($p.Guid) { $exportPolicyGuidToName[[string]$p.Guid] = [string]$p.Name }
         }
 
+        # ADR 0016 section 12 -- export-scope exclusion. The desired-
+        # state schema and the forward-apply guard model only SIT-based
+        # `contentContainsSensitiveInformation` (CCSI). A tenant rule
+        # whose conditions resolve to an EMPTY CCSI (EDM, trainable
+        # classifier, document fingerprint, or any non-CCSI condition)
+        # is non-representable: emitting it would violate the schema's
+        # CCSI `minItems: 1` floor and the non-empty-CCSI script guard
+        # on the very next deploy, breaking the closed loop. Build rules
+        # FIRST and skip any rule whose resolved CCSI is empty (warn per
+        # skip), then build policies and skip any left with zero
+        # surviving rules (warn). The exporter never emits an empty-CCSI
+        # rule, so the CCSI `minItems: 1` schema floor and the non-empty
+        # script guard both stay in place.
         $ruleExport = New-Object 'System.Collections.Generic.List[System.Collections.Specialized.OrderedDictionary]'
+        $representablePolicyNames = New-Object 'System.Collections.Generic.HashSet[string]'
         # Build a (rule name -> YAML workload) map so the export
         # preserves the human-authored workload value rather than
         # overwriting it with the tenant-expanded readback. See
         # Resolve-DesiredRuleWorkload and issue #499.
         $desiredWorkloadByRuleName = Resolve-DesiredRuleWorkload -DesiredRules $desiredRuleEntries
+        $skippedRuleCount = 0
         foreach ($r in $allRules | Sort-Object Name) {
             $rh = ConvertTo-TenantRuleHash -Rule $r -PolicyGuidToName $exportPolicyGuidToName
+            if (@($rh.ccsi).Count -eq 0) {
+                # Non-representable rule (empty CCSI). Skip so the
+                # exported YAML forward-applies to all-NoChange.
+                $skippedRuleCount++
+                Write-Warning ("Skipping non-representable auto-label rule '{0}' (policy '{1}') from export: its conditions resolve to an empty contentContainsSensitiveInformation. ADR 0016 models only SIT-based CCSI; EDM, trainable-classifier, and document-fingerprint rules are reported as skipped orphans. Reference: docs/adr/0016-auto-label-policy-shape.md section 12." -f $rh.name, $rh.policy)
+                continue
+            }
+            [void]$representablePolicyNames.Add($rh.policy)
             $entry = [ordered]@{}
             $entry['name']     = $rh.name
             $entry['policy']   = $rh.policy
@@ -1256,6 +1270,44 @@ try {
             }
             $entry['contentContainsSensitiveInformation'] = @($ccsiList)
             $ruleExport.Add($entry)
+        }
+        if ($skippedRuleCount -gt 0) {
+            Write-Information ("Skipped {0} non-representable auto-label rule(s) during export (empty CCSI; see ADR 0016 section 12)." -f $skippedRuleCount) -InformationAction Continue
+        }
+
+        # ADR 0016 section 12 -- build policies SECOND, skipping any
+        # policy left with zero surviving (representable) rules. Such a
+        # policy's only rule(s) were dropped above, so re-emitting the
+        # parent would strand it (the reconciler would create a rule-less
+        # policy) and, for a CCSI-less rule, fail the schema/guard on the
+        # next deploy.
+        $policyExport = New-Object 'System.Collections.Generic.List[System.Collections.Specialized.OrderedDictionary]'
+        $skippedPolicyCount = 0
+        foreach ($p in $allPolicies | Sort-Object Name) {
+            $h = ConvertTo-TenantPolicyHash -Policy $p -TenantLabels $allLabels
+            if (-not $representablePolicyNames.Contains($h.name)) {
+                # No surviving representable rule references this policy.
+                $skippedPolicyCount++
+                Write-Warning ("Skipping non-representable auto-label policy '{0}' from export: it has no rule with a representable (SIT-based) contentContainsSensitiveInformation after rule filtering. Reported as a skipped orphan. Reference: docs/adr/0016-auto-label-policy-shape.md section 12." -f $h.name)
+                continue
+            }
+            $entry = [ordered]@{}
+            $entry['name'] = $h.name
+            $entry['mode'] = $h.mode
+            $entry['applyLabel'] = if ($h.applyLabel -and $guidToKey.ContainsKey($h.applyLabel)) {
+                $guidToKey[$h.applyLabel]
+            }
+            else { $h.applyLabel }
+            $entry['exchangeLocation'] = @($h.exchangeLocation | Sort-Object)
+            $advanced = [ordered]@{}
+            foreach ($k in @($h.advancedSettings.Keys | Sort-Object)) {
+                $advanced[$k] = $h.advancedSettings[$k]
+            }
+            $entry['advancedSettings'] = $advanced
+            $policyExport.Add($entry)
+        }
+        if ($skippedPolicyCount -gt 0) {
+            Write-Information ("Skipped {0} non-representable auto-label policy/policies during export (no surviving rule; see ADR 0016 section 12)." -f $skippedPolicyCount) -InformationAction Continue
         }
 
         Write-Information ("Exporting {0} policy/policies and {1} rule(s)." -f $policyExport.Count, $ruleExport.Count) -InformationAction Continue
@@ -1731,8 +1783,21 @@ try {
                 $newArgs = @{
                     Name                  = $d.name
                     ApplySensitivityLabel = $d.applyLabel
-                    ExchangeLocation      = $d.exchangeLocation
                     Mode                  = $d.mode
+                }
+                # ADR 0016 section 12 -- include -ExchangeLocation only
+                # when non-empty. A SharePoint/OneDrive-only policy
+                # exports as `exchangeLocation: []`; SP/OD location
+                # fields are deferred (ADR 0016 section 2), so a genuine
+                # Create with no location has nothing to scope. Omit the
+                # parameter and let New-AutoSensitivityLabelPolicy fail
+                # loudly on the genuinely-missing location rather than
+                # silently create an unscoped policy.
+                if (@($d.exchangeLocation).Count -gt 0) {
+                    $newArgs['ExchangeLocation'] = $d.exchangeLocation
+                }
+                else {
+                    Write-Warning ("Auto-label policy '{0}' has an empty exchangeLocation; omitting -ExchangeLocation on Create. SharePoint/OneDrive location fields are deferred (ADR 0016 section 2), so New-AutoSensitivityLabelPolicy will fail loudly if no location is supplied." -f $d.name)
                 }
                 $shouldProcessAction = "New-AutoSensitivityLabelPolicy -Mode {0}" -f $d.mode
                 if ($PSCmdlet.ShouldProcess($shouldProcessTarget, $shouldProcessAction)) {
@@ -1781,15 +1846,28 @@ try {
                     }
                 }
                 if ($changedFields -contains 'exchangeLocation') {
-                    $action = 'Set-AutoSensitivityLabelPolicy -ExchangeLocation'
-                    if ($PSCmdlet.ShouldProcess($shouldProcessTarget, $action)) {
-                        try {
-                            Set-AutoSensitivityLabelPolicy -Identity $d.name -ExchangeLocation $d.exchangeLocation -Confirm:$false -ErrorAction Stop | Out-Null
-                            Write-Information ("Updated auto-label policy '{0}' ExchangeLocation." -f $d.name) -InformationAction Continue
-                        }
-                        catch {
-                            Write-Error ("Set-AutoSensitivityLabelPolicy '{0}' (ExchangeLocation) failed: {1}" -f $d.name, $_.Exception.Message)
-                            return
+                    # ADR 0016 section 12 -- skip the -ExchangeLocation
+                    # write when the desired value is empty. Both hash
+                    # converters default exchangeLocation to @(), so a
+                    # SP/OD-only policy yields desired [] == tenant [] ->
+                    # NoChange and this branch never fires. If it does
+                    # fire with an empty desired value (tenant had a
+                    # populated location), skip the write rather than
+                    # clear the tenant scope.
+                    if (@($d.exchangeLocation).Count -eq 0) {
+                        Write-Warning ("Auto-label policy '{0}' has an empty desired exchangeLocation; skipping the -ExchangeLocation write to avoid clearing the tenant scope (ADR 0016 section 12)." -f $d.name)
+                    }
+                    else {
+                        $action = 'Set-AutoSensitivityLabelPolicy -ExchangeLocation'
+                        if ($PSCmdlet.ShouldProcess($shouldProcessTarget, $action)) {
+                            try {
+                                Set-AutoSensitivityLabelPolicy -Identity $d.name -ExchangeLocation $d.exchangeLocation -Confirm:$false -ErrorAction Stop | Out-Null
+                                Write-Information ("Updated auto-label policy '{0}' ExchangeLocation." -f $d.name) -InformationAction Continue
+                            }
+                            catch {
+                                Write-Error ("Set-AutoSensitivityLabelPolicy '{0}' (ExchangeLocation) failed: {1}" -f $d.name, $_.Exception.Message)
+                                return
+                            }
                         }
                     }
                 }

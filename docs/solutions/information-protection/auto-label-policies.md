@@ -142,6 +142,27 @@ monolithic `deploy-data-plane.yml` sensitivity-label step.
    vocabulary. Use [`labels-manual-portal-actions.md`](../../runbooks/labels-manual-portal-actions.md) only for
    label-level client-side auto-apply removal; service-side auto-label policies are managed by this reconciler.
 
+## Round-trip and scope semantics (ADR 0016 §12)
+
+The closed loop — portal change → `-ExportCurrentState` → sync PR → apply — reverse-exports only tenant state the
+reconciler can then forward-apply. Two behaviors keep the loop closed:
+
+- **Export-scope exclusion.** [ADR 0016](../../adr/0016-auto-label-policy-shape.md) models only SIT-based
+  `contentContainsSensitiveInformation` (CCSI). A tenant rule whose conditions resolve to an empty CCSI — Exact Data
+  Match (EDM), trainable classifier, document fingerprint, or any non-SIT condition — is non-representable.
+  `-ExportCurrentState` builds rules first and skips any rule with an empty resolved CCSI (one warning per skip), then
+  builds policies and skips any left with zero surviving rules (one warning per skip). The non-representable rules and
+  policies are reported as skipped orphans, never written to YAML, so the regenerated file forward-deploys to
+  all-`NoChange` for the representable (SIT-based, SharePoint/OneDrive-scoped) policies.
+
+- **NoChange-only location semantics.** A SharePoint/OneDrive-only policy legitimately exports as
+  `exchangeLocation: []`. The `exchangeLocation` key is required but its array may be empty; the schema no longer floors
+  it at `minItems: 1` (the CCSI floor is unchanged), and the input-validation guard requires the key present but allows
+  the empty array. Both hash converters default `exchangeLocation` to an empty array, so a SP/OD-only policy yields
+  desired `[]` == tenant `[]` → `NoChange` and no cmdlet fires. On `Create`, an empty value omits `-ExchangeLocation`
+  (the cmdlet then fails loudly on the genuinely-missing location, since SP/OD location fields are deferred per ADR 0016
+  §2); on `Update`, an empty value skips the location write rather than clearing the tenant scope.
+
 ## References
 
 - **[Automatically apply a sensitivity label to Microsoft 365 data](https://learn.microsoft.com/en-us/purview/apply-sensitivity-label-automatically)**
