@@ -39,8 +39,7 @@
                 "exchangeLocation": {
                     "type": "array",
                     "items": { "type": "string", "minLength": 1 },
-                    "minItems": 1,
-                    "description": "[All] or a list of mailbox SMTP addresses."
+                    "description": "[All] or a list of mailbox SMTP addresses. May be an empty array for a SharePoint/OneDrive-only policy (ADR 0016 section 12): a SP/OD-scoped policy exports as exchangeLocation: []. The key is required by the reconciler's input guard, but the array may be empty."
                 },
                 "advancedSettings": {
                     "type": "object",

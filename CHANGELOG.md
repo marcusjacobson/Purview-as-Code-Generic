@@ -18,13 +18,19 @@ To add an entry:
 
 ## 2026-07-12
 
-### CI/CD
+### Fixed
 
-- **ci:** add DLP companion workflows `sync-dlp-from-tenant.yml` (scheduled reverse drift-back, `-ExportCurrentState`) and `deploy-dlp.yml` (isolated forward apply with the ADR 0029 enumerate/apply/drift-back direction-policy contract), closing the Tier-1 loop for the Data Loss Prevention surface per the companion-workflow rule in `.github/instructions/github-actions.instructions.md` (#70)
+- **scripts:** make `Deploy-AutoLabelPolicies.ps1` round-trip exportable state — `-ExportCurrentState` now builds rules first and skips any whose resolved `contentContainsSensitiveInformation` is empty (EDM / trainable classifier / document fingerprint), then skips parent policies left with zero surviving rules, reporting both as skipped orphans instead of emitting entries that fail the CCSI `minItems:1` floor on the next deploy (ADR 0016 §12) (#57)
+- **policies:** remove the `minItems: 1` floor on `exchangeLocation` in `auto-label-policies.schema.json`, and relax the reconciler's forward-apply input guard to require the key present but allow an empty array, so a SharePoint/OneDrive-only policy's `exchangeLocation: []` round-trips; empty-location writes are gated (Create omits `-ExchangeLocation`, Update skips it) so desired `[]` == tenant `[]` → NoChange (ADR 0016 §12) (#57)
 
 ### Documentation
 
 - **docs:** point the DLP solution guide and end-to-end smoke runbook at the new `deploy-dlp.yml` / `sync-dlp-from-tenant.yml` workflows and drop the "no dedicated forward workflow" gap (#70)
+- **docs:** add ADR 0016 §12 (export-scope exclusion + NoChange-only location semantics), a round-trip/scope section in the auto-label-policies solution guide, and export-scope notes in the YAML header (#57)
+
+### CI/CD
+
+- **ci:** add DLP companion workflows `sync-dlp-from-tenant.yml` (scheduled reverse drift-back, `-ExportCurrentState`) and `deploy-dlp.yml` (isolated forward apply with the ADR 0029 enumerate/apply/drift-back direction-policy contract), closing the Tier-1 loop for the Data Loss Prevention surface per the companion-workflow rule in `.github/instructions/github-actions.instructions.md` (#70)
 
 ## 2026-07-11
 
