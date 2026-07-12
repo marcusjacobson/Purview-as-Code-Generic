@@ -1,0 +1,310 @@
+name: deploy-irm
+
+# Isolated FORWARD apply companion for the Microsoft Purview Insider Risk
+# Management (IRM) policy surface. Reconciles the IRM policies in the
+# contoso.onmicrosoft.com tenant from data-plane/irm/policies.yaml via
+# scripts/Deploy-IRMPolicies.ps1.
+#
+# Forward twin of the already-landed reverse companion
+# sync-irm-from-tenant.yml (PR #59). Together they complete the "every
+# Deploy-*.ps1 reconciler gets both companion workflows" rule in
+# .github/instructions/github-actions.instructions.md for IRM, exactly as
+# deploy-dlp.yml (PR #70) did for the DLP surface. Before this workflow,
+# IRM's only forward apply path was one step buried inside the monolithic
+# deploy-data-plane.yml, which cannot run IRM in isolation and re-touches
+# every other data-plane surface in a single job -- several of which
+# require the control-plane Purview account and go red when it is not
+# deployed, producing poor forward-apply evidence for IRM alone.
+#
+# Tier-3 surface -- SINGLE apply pass. Unlike the export-capable forward
+# workflows (deploy-labels.yml, deploy-auto-label-policies.yml,
+# deploy-dlp.yml), scripts/Deploy-IRMPolicies.ps1 exposes NO
+# -ExportCurrentState and NO -VerifyPublished switch (the underlying
+# New-/Set-/Get-/Remove-InsiderRiskPolicy cmdlets have no bulk-export or
+# publish-status equivalent). It is on the full-circle
+# reconciler-contract-guard exempt list in validate.yml for exactly this
+# reason. So this workflow does NOT get:
+#
+#   * the DLP two-pass portal-wins enumerate that parses [ADR0029-SKIP]
+#     markers to build a -SkipNames set. IRM's skip list is the STATIC
+#     ADR 0036 baseline, not drift-derived, so there is nothing to
+#     enumerate.
+#   * a drift-back-pr job. IRM cannot re-export, so there is no YAML to
+#     regenerate and no PR to open. Reverse drift is surfaced as a GitHub
+#     ISSUE by sync-irm-from-tenant.yml, not a PR.
+#   * a Verify-Published step (no such switch -- same omission already
+#     accepted in deploy-dlp.yml).
+#
+# It keeps everything else from the blessed deploy-dlp.yml shape:
+# workflow_dispatch inputs, the repo-wins typed-confirmation pre-flight
+# gate, read-only audit mode, a push trigger that behaves as
+# dispatch-with-defaults, concurrency, and the temp-open/restore Key Vault
+# firewall window. See the Tier-3 (export-incapable) surfaces carve-out in
+# .github/instructions/github-actions.instructions.md.
+#
+# Modes (see docs/adr/0029-source-of-truth-direction-policy.md and
+# docs/runbooks/irm-end-to-end-smoke.md):
+#
+#   audit       -- read-only. -DirectionPolicy audit forces
+#                  $WhatIfPreference so every New-/Set-/Remove-
+#                  InsiderRiskPolicy short-circuits to its "Would ..."
+#                  branch. No write fires under any condition. Produces
+#                  the plan table for compliance evidence.
+#   portal-wins -- default, non-destructive. Creates missing policies and
+#                  applies non-conflicting updates, SKIPS shared-property
+#                  drift so the portal stays authoritative.
+#   repo-wins   -- DESTRUCTIVE. Overwrites tenant fields with YAML values
+#                  for shared-property drift; each overwrite emits a
+#                  Write-Warning naming the drifted field set. Requires
+#                  confirm_overwrite_irm='overwrite portal' (case-sensitive).
+#
+# Skip baseline (GUID-free, lockstep). The default skip_names_irm carries
+# the 4 operator-authored mid-testing IRM policy display names
+# (`IRM Lab — <scenario>`, em-dash U+2014). Byte-match this default across
+# deploy-irm.yml, deploy-data-plane.yml, and sync-irm-from-tenant.yml and
+# keep them in lockstep with ADR 0036's skip-baseline table. The
+# system-managed IRM_Tenant_Setting_* policy is NOT listed --
+# Deploy-IRMPolicies.ps1 auto-classifies it NoChange via a name-prefix
+# wildcard, so an explicit entry is redundant and its real tenant-scoped
+# GUID suffix must never be committed (identifier-boundary rule).
+#
+# Key Vault access: the reconciler self-connects to Security & Compliance
+# PowerShell from the Key Vault cert/app config internally (same as the
+# monolith's IRM step and sync-irm-from-tenant.yml) -- no explicit Connect
+# step; only the KV firewall must be open. The vault is private-network by
+# default; this job temp-opens the public endpoint for the duration of the
+# apply and restores it via an `if: always()` step.
+#
+# References (Microsoft Learn / GitHub Docs):
+#   https://learn.microsoft.com/en-us/azure/developer/github/connect-from-azure-openid-connect
+#   https://learn.microsoft.com/en-us/powershell/exchange/connect-to-scc-powershell
+#   https://learn.microsoft.com/en-us/powershell/exchange/app-only-auth-powershell-v2
+#   https://learn.microsoft.com/en-us/powershell/module/exchange/get-insiderriskpolicy
+#   https://learn.microsoft.com/en-us/powershell/module/exchange/new-insiderriskpolicy
+#   https://learn.microsoft.com/en-us/powershell/module/exchange/set-insiderriskpolicy
+#   https://learn.microsoft.com/en-us/powershell/module/exchange/remove-insiderriskpolicy
+#   https://learn.microsoft.com/en-us/purview/insider-risk-management
+#   https://learn.microsoft.com/en-us/cli/azure/keyvault#az-keyvault-update
+#   https://docs.github.com/en/actions/security-guides/security-hardening-for-github-actions
+#   https://docs.github.com/en/actions/using-workflows/workflow-syntax-for-github-actions#onworkflow_dispatchinputs
+
+on:
+  workflow_dispatch:
+    inputs:
+      irm_direction_policy:
+        description: |
+          ADR 0029 source-of-truth direction policy for the Insider Risk
+          Management apply. Three modes:
+
+          - audit       Read-only verify. No writes under any condition.
+          - portal-wins Default. Create + non-conflicting updates apply;
+                        shared-property drift is SKIPPED so the portal
+                        stays authoritative. Reverse drift is reported by
+                        sync-irm-from-tenant.yml as an issue, NOT a PR.
+          - repo-wins   DESTRUCTIVE. Overwrite tenant fields with YAML
+                        values for shared-property drift. Requires
+                        confirm_overwrite_irm='overwrite portal'.
+
+          See docs/runbooks/irm-end-to-end-smoke.md.
+        type: choice
+        options:
+          - audit
+          - portal-wins
+          - repo-wins
+        default: portal-wins
+        required: false
+      confirm_overwrite_irm:
+        description: |
+          Typed-confirmation token. When `irm_direction_policy` is
+          `repo-wins` this MUST equal the literal string `overwrite portal`
+          (case-sensitive, two words separated by one space). Ignored when
+          `irm_direction_policy` is `audit` or `portal-wins`. Mirrors the
+          destructive-write confirmation rule in
+          .github/instructions/mcp-tool-usage.instructions.md.
+        type: string
+        default: ''
+        required: false
+      skip_names_irm:
+        description: |
+          Comma-separated list of Insider Risk Management policy names
+          passed through to Deploy-IRMPolicies.ps1 -SkipNames.
+          Case-insensitive; whitespace around commas is trimmed. The
+          default carries the 4 operator-authored `IRM Lab — *` policy
+          names ratified as a permanent skip in
+          docs/adr/0036-irm-tenant-setting-immovable.md (the #603
+          mid-testing window). The system-managed
+          `IRM_Tenant_Setting_<tenant-guid>` policy is NOT baselined here:
+          the reconciler classifies it NoChange via a name-prefix
+          wildcard, so it never plans a mutation regardless of this list.
+          Keep this default byte-for-byte in lockstep with the
+          skip_names_irm defaults in deploy-data-plane.yml and
+          sync-irm-from-tenant.yml, and with ADR 0036's skip-baseline table.
+        type: string
+        default: 'IRM Lab — Data leaks by priority users,IRM Lab — Data theft by departing users,IRM Lab — General data leaks,IRM Lab — Risky AI usage'
+        required: false
+  push:
+    branches: [main]
+    paths:
+      - 'data-plane/irm/policies.yaml'
+      - 'data-plane/irm/policies.schema.json'
+      - 'scripts/Deploy-IRMPolicies.ps1'
+      - 'scripts/modules/DirectionPolicy.psm1'
+      - '.github/workflows/deploy-irm.yml'
+
+# Deny-by-default at workflow scope. The single apply job declares the
+# minimum permission set it needs. This Tier-3 workflow never writes files
+# or opens a PR, so it holds no `contents: write` and no `pull-requests`.
+# Reference:
+# https://docs.github.com/en/actions/security-guides/security-hardening-for-github-actions#using-the-permissions-key
+permissions: {}
+
+concurrency:
+  group: deploy-irm-lab
+  cancel-in-progress: false
+
+jobs:
+  apply:
+    name: Apply IRM policies
+    runs-on: ubuntu-latest
+    environment: lab
+    permissions:
+      id-token: write       # OIDC token for azure/login@v2.
+      contents: read        # Checkout only; does not push or open PRs.
+    env:
+      KEY_VAULT_NAME: ${{ vars.KEY_VAULT_NAME }}
+      # Defaults applied for `push` events (where github.event.inputs is
+      # null) so the rest of the job can read the env vars unconditionally
+      # and a push-triggered run behaves identically to a dispatch with
+      # default inputs.
+      IRM_DIRECTION_POLICY: ${{ github.event.inputs.irm_direction_policy || 'portal-wins' }}
+      CONFIRM_OVERWRITE_IRM: ${{ github.event.inputs.confirm_overwrite_irm }}
+      SKIP_NAMES_IRM: ${{ github.event.inputs.skip_names_irm || 'IRM Lab — Data leaks by priority users,IRM Lab — Data theft by departing users,IRM Lab — General data leaks,IRM Lab — Risky AI usage' }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # Fail-fast pre-flight. Enforces the ADR 0029 typed-confirmation gate
+      # for irm_direction_policy=repo-wins BEFORE Azure login, BEFORE the
+      # Key Vault unlock window, and BEFORE any data-plane call. Inputs flow
+      # through env: to keep ${{ github.event.* }} substitution outside the
+      # pwsh shell-quoting boundary per
+      # https://docs.github.com/en/actions/security-guides/security-hardening-for-github-actions#understanding-the-risk-of-script-injections
+      # Gated to workflow_dispatch so push-triggered runs (always default
+      # portal-wins) skip it.
+      - name: Validate dispatch inputs
+        if: github.event_name == 'workflow_dispatch'
+        shell: pwsh
+        env:
+          IRM_DIRECTION_POLICY: ${{ env.IRM_DIRECTION_POLICY }}
+          CONFIRM_OVERWRITE_IRM: ${{ env.CONFIRM_OVERWRITE_IRM }}
+        run: |
+          $policy = $env:IRM_DIRECTION_POLICY
+          $overwrite = $env:CONFIRM_OVERWRITE_IRM
+          $overwriteDisplay = if ([string]::IsNullOrEmpty($overwrite)) { '<empty>' } else { '<provided>' }
+          Write-Host "irm_direction_policy  = '$policy'"
+          Write-Host "confirm_overwrite_irm = $overwriteDisplay"
+
+          # ADR 0029 typed-confirmation gate. -cne enforces a
+          # case-sensitive comparison so 'Overwrite Portal' or
+          # 'OVERWRITE PORTAL' do not satisfy the gate.
+          if ($policy -eq 'repo-wins') {
+            if ($overwrite -cne 'overwrite portal') {
+              $msg = "::error::irm_direction_policy=repo-wins requires confirm_overwrite_irm to equal the literal string " +
+                     "'overwrite portal' (case-sensitive, two words separated by one space). " +
+                     "Re-dispatch with the correct token. See docs/runbooks/irm-end-to-end-smoke.md."
+              Write-Host $msg
+              exit 1
+            }
+            Write-Host '::warning::repo-wins confirmed. The Apply step will OVERWRITE tenant fields with YAML values for any shared-property drift on IRM policies.'
+          }
+
+          if ($policy -eq 'audit') {
+            Write-Host 'audit mode: this run will read tenant state and emit a plan; no writes will fire under any condition.'
+          }
+          if ($policy -eq 'portal-wins') {
+            Write-Host 'portal-wins mode: shared-property drift will be skipped so the portal stays authoritative. Reverse drift is reported by sync-irm-from-tenant.yml as an issue.'
+          }
+
+      - name: Azure login (OIDC)
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Install PowerShell modules
+        shell: pwsh
+        run: |
+          Install-Module powershell-yaml -Force -Scope CurrentUser
+          # Connect-IPPSSession -AccessToken requires ExchangeOnlineManagement
+          # v3.8.0-Preview1+; -AllowPrerelease until GA. Matches the IRM step
+          # of deploy-data-plane.yml and sync-irm-from-tenant.yml.
+          # Reference: https://learn.microsoft.com/en-us/powershell/exchange/exchange-online-powershell-v2
+          Install-Module ExchangeOnlineManagement -Force -Scope CurrentUser -AllowPrerelease
+
+      - name: Temporarily allow Key Vault public access
+        id: kv-open
+        shell: pwsh
+        run: |
+          if (-not $env:KEY_VAULT_NAME) {
+            throw "vars.KEY_VAULT_NAME is not set on the lab environment. Set it before re-running."
+          }
+          # Reference: https://learn.microsoft.com/en-us/cli/azure/keyvault#az-keyvault-update
+          az keyvault update `
+            --name $env:KEY_VAULT_NAME `
+            --public-network-access Enabled `
+            --default-action Allow `
+            --only-show-errors `
+            -o none
+          Add-Content -Path $env:GITHUB_OUTPUT -Value "opened=true"
+          # Wait for the network rule change to propagate before the first
+          # data-plane call. 30s matches the sibling IRM / DLP workflows.
+          Start-Sleep -Seconds 30
+
+      # Single idempotent apply pass. IRM is Tier-3: the skip list is the
+      # static ADR 0036 baseline, not a drift-derived set, so there is no
+      # enumerate pass to run first. The reconciler self-connects to
+      # Security & Compliance PowerShell from the Key Vault cert/app config;
+      # only the KV firewall must be open (handled above).
+      # Reference: docs/adr/0029-source-of-truth-direction-policy.md
+      - name: Apply IRM policies
+        shell: pwsh
+        env:
+          IRM_DIRECTION_POLICY: ${{ env.IRM_DIRECTION_POLICY }}
+          SKIP_NAMES_IRM: ${{ env.SKIP_NAMES_IRM }}
+        run: |
+          $applyArgs = @{
+            DirectionPolicy   = $env:IRM_DIRECTION_POLICY
+            Confirm           = $false
+            InformationAction = 'Continue'
+          }
+          $skipNames = @($env:SKIP_NAMES_IRM -split ',' | ForEach-Object { $_.Trim() } | Where-Object { $_ })
+          if ($skipNames.Count -gt 0) {
+            $applyArgs['SkipNames'] = $skipNames
+            Write-Host "-SkipNames count = $($skipNames.Count) (ADR 0036 baseline + any operator additions)"
+          }
+          if ($env:IRM_DIRECTION_POLICY -eq 'repo-wins') {
+            Write-Host '::warning::repo-wins: IRM policy tenant fields will be OVERWRITTEN with YAML values for shared-property drift. Each overwrite emits a Write-Warning naming the field set. See ADR 0029.'
+          }
+          Write-Host "Applying with -DirectionPolicy $($env:IRM_DIRECTION_POLICY)"
+          ./scripts/Deploy-IRMPolicies.ps1 @applyArgs
+
+      - name: Restore Key Vault network defaults
+        if: always() && steps.kv-open.outputs.opened == 'true'
+        shell: pwsh
+        run: |
+          # Reference: https://learn.microsoft.com/en-us/cli/azure/keyvault#az-keyvault-update
+          az keyvault update `
+            --name $env:KEY_VAULT_NAME `
+            --public-network-access Disabled `
+            --default-action Deny `
+            --only-show-errors `
+            -o none
+
+      - name: Summarize result
+        if: always()
+        shell: pwsh
+        env:
+          IRM_DIRECTION_POLICY: ${{ env.IRM_DIRECTION_POLICY }}
+        run: |
+          Write-Host "::notice::deploy-irm apply pass complete under -DirectionPolicy $($env:IRM_DIRECTION_POLICY). Reverse drift is watched by sync-irm-from-tenant.yml (issue-based, Tier-3)."

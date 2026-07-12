@@ -109,13 +109,53 @@ For an end-to-end live-tenant smoke (Create → Get → Plan-shape assert → De
 
 ## CI wiring
 
-The `Deploy IRM policies` step in [`.github/workflows/deploy-data-plane.yml`](../../../.github/workflows/deploy-data-plane.yml) runs the reconciler inside the shared `kv-open` / `kv-close` window, immediately after `Deploy file plan`. Three `workflow_dispatch` inputs thread the ADR 0029 contract through to the reconciler, mirroring the Records step shape (PR #588):
+IRM has **two** forward apply paths. Prefer the isolated
+[`deploy-irm.yml`](../../../.github/workflows/deploy-irm.yml).
+
+### Isolated forward workflow — `deploy-irm.yml` (preferred)
+
+[`.github/workflows/deploy-irm.yml`](../../../.github/workflows/deploy-irm.yml)
+runs the reconciler on its own — one `apply` job, one idempotent apply
+pass — so IRM can be applied in isolation without re-touching (and
+red-lighting) every other data-plane surface the monolith runs in the same
+job. It is the **forward twin** of the reverse companion
+[`sync-irm-from-tenant.yml`](../../../.github/workflows/sync-irm-from-tenant.yml)
+and mirrors the [`deploy-dlp.yml`](../../../.github/workflows/deploy-dlp.yml)
+precedent, adapted for a Tier-3 surface. Triggers on `workflow_dispatch`
+plus `push` to `main` under `data-plane/irm/**`,
+`scripts/Deploy-IRMPolicies.ps1`, `scripts/modules/DirectionPolicy.psm1`,
+and the workflow file itself. Three `workflow_dispatch` inputs thread the
+ADR 0029 contract:
 
 - `irm_direction_policy` — `audit` / `portal-wins` (default) / `repo-wins`.
 - `confirm_overwrite_irm` — typed `overwrite portal` token, gates `repo-wins` per [ADR 0029](../../adr/0029-source-of-truth-direction-policy.md).
-- `skip_names_irm` — comma list passed through to `-SkipNames`; defaults to the 4-name [ADR 0036](../../adr/0036-irm-tenant-setting-immovable.md) baseline (the operator-authored `IRM Lab — *` policies; the system-managed `IRM_Tenant_Setting_*` policy is handled by the reconciler wildcard, not the baseline).
+- `skip_names_irm` — comma list passed through to `-SkipNames`; defaults to the 4-name [ADR 0036](../../adr/0036-irm-tenant-setting-immovable.md) baseline (byte-matched against `deploy-data-plane.yml` and `sync-irm-from-tenant.yml`).
 
-A fail-fast `Validate IRM dispatch inputs` step runs before Azure login and rejects a `repo-wins` dispatch without the typed token.
+A fail-fast `Validate dispatch inputs` step runs before Azure login and
+rejects a `repo-wins` dispatch without the typed token. Workflow-scope
+`permissions: {}`; the `apply` job holds only `id-token: write` +
+`contents: read` (no `contents: write`, no `pull-requests`). Because IRM is
+**Tier-3** — `Deploy-IRMPolicies.ps1` exposes no `-ExportCurrentState` and
+no `-VerifyPublished` — this workflow is a **single apply pass**: no
+two-pass portal-wins enumerate (the skip list is the static ADR 0036
+baseline, not drift-derived), no drift-back PR (reverse drift is
+issue-based via `sync-irm-from-tenant.yml`), and no verify-published step.
+See the Tier-3 (export-incapable) surfaces carve-out in
+[`.github/instructions/github-actions.instructions.md`](../../../.github/instructions/github-actions.instructions.md).
+
+```pwsh
+gh workflow run deploy-irm.yml
+gh workflow run deploy-irm.yml -f irm_direction_policy=repo-wins -f confirm_overwrite_irm='overwrite portal'
+```
+
+### Monolithic step — `deploy-data-plane.yml`
+
+The `Deploy IRM policies` step in [`.github/workflows/deploy-data-plane.yml`](../../../.github/workflows/deploy-data-plane.yml)
+runs the same reconciler inside the shared `kv-open` / `kv-close` window,
+immediately after `Deploy file plan`, threading the same three
+`irm_direction_policy` / `confirm_overwrite_irm` / `skip_names_irm` inputs
+(mirroring the Records step shape, PR #588). Use it when applying the whole
+data plane together; use `deploy-irm.yml` when iterating on IRM alone.
 
 ## Reverse drift-detection (Tier-3 — issue, not PR)
 
@@ -171,6 +211,7 @@ gh workflow run sync-irm-from-tenant.yml
 - [ADR 0029 — Source-of-truth direction policy](../../adr/0029-source-of-truth-direction-policy.md)
 - [ADR 0036 — IRM tenant-setting immovable](../../adr/0036-irm-tenant-setting-immovable.md)
 - [Runbook — IRM end-to-end smoke](../../runbooks/irm-end-to-end-smoke.md)
+- Forward companion workflow (preferred): [`deploy-irm.yml`](../../../.github/workflows/deploy-irm.yml)
 - Reverse companion workflow: [`sync-irm-from-tenant.yml`](../../../.github/workflows/sync-irm-from-tenant.yml)
 - Sibling solution: [`records-management.md`](records-management.md)
 

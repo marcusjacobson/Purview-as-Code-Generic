@@ -195,8 +195,15 @@ Relationship to this runbook:
 - The workflow is the automated watch loop; **this runbook is the
   operator response** when it fires. Triage with Step 1
   (`-DirectionPolicy audit`), then reconcile per the issue's "Next
-  steps" (accept into YAML, `repo-wins` overwrite, or extend the skip
-  baseline + ADR 0036).
+  steps": **accept into YAML** (edit
+  [`data-plane/irm/policies.yaml`](../../data-plane/irm/policies.yaml),
+  then re-apply forward via
+  [`deploy-irm.yml`](../../.github/workflows/deploy-irm.yml) — the isolated
+  forward companion, preferred — or the monolithic `deploy-data-plane.yml`
+  IRM step), **`repo-wins` overwrite** (dispatch `deploy-irm.yml` with
+  `irm_direction_policy=repo-wins` and the typed
+  `confirm_overwrite_irm=overwrite portal` token), or **extend the skip
+  baseline + ADR 0036**.
 - The workflow never writes to the tenant and never mutates a
   pre-existing live policy, so it is safe to leave enabled during the
   issue #603 mid-testing window.
@@ -225,5 +232,6 @@ Relationship to this runbook:
 - [Remove-InsiderRiskPolicy](https://learn.microsoft.com/en-us/powershell/module/exchange/remove-insiderriskpolicy)
 - [ADR 0029](../adr/0029-source-of-truth-direction-policy.md)
 - [ADR 0036](../adr/0036-irm-tenant-setting-immovable.md)
+- Forward companion workflow (preferred): [`deploy-irm.yml`](../../.github/workflows/deploy-irm.yml)
 - Reverse companion workflow: [`sync-irm-from-tenant.yml`](../../.github/workflows/sync-irm-from-tenant.yml)
 - [Sibling runbook: records-end-to-end-smoke.md](records-end-to-end-smoke.md)
