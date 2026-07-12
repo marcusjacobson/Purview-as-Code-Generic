@@ -1,0 +1,357 @@
+name: sync-irm-from-tenant
+
+# Reverse drift-detection companion to the Insider Risk Management (IRM)
+# leg of deploy-data-plane.yml. Detects portal-only edits to the
+# Microsoft Purview Insider Risk Management policy surface in the
+# contoso.onmicrosoft.com tenant and opens (or refreshes) a GitHub
+# ISSUE describing the drift.
+#
+# Tier-3 surface -- ISSUE, not PR. Unlike the sensitivity-label,
+# auto-label, and DLP surfaces, scripts/Deploy-IRMPolicies.ps1 exposes
+# NO -ExportCurrentState and NO -VerifyPublished switch, so this
+# workflow cannot round-trip tenant state back into
+# data-plane/irm/policies.yaml as a re-export pull request. Instead it
+# runs the reconciler in read-only ADR 0029 audit mode and opens a
+# GitHub issue so a human decides how to reconcile (accept into YAML,
+# overwrite the portal via deploy-data-plane.yml repo-wins, or ratify
+# via an ADR). This is the reverse leg the companion-workflow rule in
+# .github/instructions/github-actions.instructions.md requires; the
+# forward apply leg lives in the `Deploy IRM policies` step of
+# deploy-data-plane.yml and is gated by its own ADR 0029 contract.
+#
+# Why not the generic drift-detection.yml: that workflow greps a
+# "Plan: N adds/updates/removes" banner these compliance-plane
+# reconcilers never emit (Deploy-IRMPolicies.ps1 returns a categorized
+# object table, not a plan banner) and captures with 2>&1, which mixes
+# the Information stream (stream 6) into the parse. This workflow is
+# object-based: it captures the reconciler's returned [pscustomobject]
+# rows from the success stream (stream 1) and filters on
+# .Category / .Name / .Reason -- no stdout/stderr text scraping.
+#
+# Read-only against the tenant. The reconciler is invoked with
+# -DirectionPolicy audit, which forces $WhatIfPreference so every
+# New-/Set-/Remove-InsiderRiskPolicy write short-circuits to its
+# "Would ..." branch. No write fires under any circumstance
+# (docs/adr/0029-source-of-truth-direction-policy.md). Per security
+# principle #9 and mcp-tool-usage.instructions.md read-only default,
+# this workflow never invokes the apply path.
+#
+# Skip baseline is a POST-FILTER, not -SkipNames. -SkipNames is inert
+# in audit mode (the audit short-circuit runs before the ADR 0029
+# skip pass in Deploy-IRMPolicies.ps1), so this workflow does NOT pass
+# -SkipNames to the script. It instead removes the ADR 0036 skip
+# baseline names from the returned object rows after the fact. The
+# baseline default mirrors the `skip_names_irm` default in
+# deploy-data-plane.yml verbatim (1 Microsoft-managed
+# IRM_Tenant_Setting_* policy + 4 operator-authored mid-testing
+# policies; docs/adr/0036-irm-tenant-setting-immovable.md).
+#
+# Self-provisioned issue labels: `gh issue create --label <name>`
+# fails the entire call (and creates nothing) if any referenced label
+# is missing -- a fresh fork lacks the `drift-detected` label. The
+# issue step therefore reads the existing label set, creates only the
+# missing labels, then creates the issue.
+#
+# Federated credential reuse: the gh-oidc-purview-data-plane app's
+# federated credential is scoped to
+# `repo:contoso/Purview-as-Code-Generic:environment:lab`
+# (per ADR 0010). Because this job declares `environment: lab`, no new
+# federated credential subject is required for the schedule trigger.
+#
+# Key Vault access: the runner principal signs the IPPS client_assertion
+# JWT via `az keyvault key sign` against the lab vault (resolved from
+# vars.KEY_VAULT_NAME). The vault is private-network by default; the
+# workflow temp-opens its public endpoint for the duration of the
+# audit read and restores it via an `if: always()` step. The 30-second
+# sleep matches the sibling sync workflows.
+#
+# References (Microsoft Learn, GitHub Docs):
+#   https://learn.microsoft.com/en-us/azure/developer/github/connect-from-azure-openid-connect
+#   https://learn.microsoft.com/en-us/entra/workload-id/workload-identity-federation-create-trust
+#   https://learn.microsoft.com/en-us/powershell/exchange/connect-to-scc-powershell
+#   https://learn.microsoft.com/en-us/powershell/exchange/app-only-auth-powershell-v2
+#   https://learn.microsoft.com/en-us/powershell/module/exchange/get-insiderriskpolicy
+#   https://learn.microsoft.com/en-us/purview/insider-risk-management
+#   https://learn.microsoft.com/en-us/cli/azure/keyvault#az-keyvault-update
+#   https://docs.github.com/en/actions/security-guides/security-hardening-for-github-actions
+#   https://docs.github.com/en/actions/writing-workflows/choosing-when-your-workflow-runs/events-that-trigger-workflows#schedule
+#   https://cli.github.com/manual/gh_issue_create
+#   https://cli.github.com/manual/gh_label_create
+
+on:
+  schedule:
+    # Daily at 08:00 UTC. Offset one hour after the 07:00 DLP drift-back
+    # slot (sync-dlp-from-tenant.yml) so the IRM audit runs after the
+    # DLP surface, not concurrently with it. GitHub Actions runs
+    # scheduled workflows independently per workflow file. Cron grammar:
+    # https://docs.github.com/en/actions/writing-workflows/choosing-when-your-workflow-runs/events-that-trigger-workflows#schedule
+    - cron: '0 8 * * *'
+  workflow_dispatch:
+    inputs:
+      skip_names_irm:
+        description: |
+          Comma-separated list of Insider Risk Management policy names
+          to suppress from the drift report. Applied as a POST-FILTER on
+          the reconciler's returned object rows (NOT passed to the
+          script -- -SkipNames is inert in audit mode). Case-insensitive;
+          whitespace around commas is trimmed. The default carries the 5
+          names ratified as permanent skip in
+          docs/adr/0036-irm-tenant-setting-immovable.md: the
+          system-managed `IRM_Tenant_Setting_<tenant-guid>` policy plus
+          the four operator-authored `IRM Lab — *` policies under the
+          issue #603 hard rule (mid-testing window). Keep this default
+          in lockstep with the `skip_names_irm` default in
+          deploy-data-plane.yml and ADR 0036's source-of-truth table.
+        type: string
+        default: 'IRM_Tenant_Setting_bd249dd2-1bd6-4d7c-b0d4-7607b70a8207,IRM Lab — Data leaks by priority users,IRM Lab — Data theft by departing users,IRM Lab — General data leaks,IRM Lab — Risky AI usage'
+        required: false
+
+# Least-privilege. No `pull-requests` scope -- this Tier-3 surface opens
+# an ISSUE, not a PR.
+permissions:
+  id-token: write           # OIDC token for azure/login@v2.
+  contents: read            # Checkout only; no writes.
+  issues: write             # gh issue create / gh label create when drift detected.
+
+concurrency:
+  group: sync-irm-lab
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    name: Detect IRM policy drift from tenant
+    runs-on: ubuntu-latest
+    environment: lab
+    env:
+      KEY_VAULT_NAME: ${{ vars.KEY_VAULT_NAME }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Azure login (OIDC)
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Install PowerShell modules
+        shell: pwsh
+        run: |
+          Install-Module powershell-yaml -Force -Scope CurrentUser
+          # Connect-IPPSSession -AccessToken requires ExchangeOnlineManagement
+          # v3.8.0-Preview1+; -AllowPrerelease until GA. Mirrors
+          # sync-dlp-from-tenant.yml.
+          # Reference: https://learn.microsoft.com/en-us/powershell/exchange/exchange-online-powershell-v2
+          Install-Module ExchangeOnlineManagement -Force -Scope CurrentUser -AllowPrerelease
+
+      - name: Temporarily allow Key Vault public access
+        id: kv-open
+        shell: pwsh
+        run: |
+          if (-not $env:KEY_VAULT_NAME) {
+            throw "vars.KEY_VAULT_NAME is not set on the lab environment. Set it before re-running."
+          }
+          # Reference: https://learn.microsoft.com/en-us/cli/azure/keyvault#az-keyvault-update
+          az keyvault update `
+            --name $env:KEY_VAULT_NAME `
+            --public-network-access Enabled `
+            --default-action Allow `
+            --only-show-errors `
+            -o none
+          Add-Content -Path $env:GITHUB_OUTPUT -Value "opened=true"
+          # Wait for the network rule change to propagate before the
+          # first data-plane call. 30s matches the sibling sync
+          # workflows.
+          Start-Sleep -Seconds 30
+
+      - name: Detect IRM drift in ADR 0029 audit mode
+        id: detect
+        shell: pwsh
+        env:
+          SKIP_NAMES_IRM: ${{ inputs.skip_names_irm }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $runUrl = $env:RUN_URL
+
+          # Build the skip baseline as an ordinal-insensitive set. This
+          # is a POST-FILTER on the returned object rows. We do NOT pass
+          # -SkipNames to the script: -SkipNames is inert in audit mode
+          # because Deploy-IRMPolicies.ps1's audit short-circuit runs
+          # before its ADR 0029 skip pass.
+          # Reference: docs/adr/0036-irm-tenant-setting-immovable.md
+          $skipSet = [System.Collections.Generic.HashSet[string]]::new(
+            [System.StringComparer]::OrdinalIgnoreCase)
+          if (-not [string]::IsNullOrWhiteSpace($env:SKIP_NAMES_IRM)) {
+            foreach ($n in ($env:SKIP_NAMES_IRM -split ',')) {
+              $t = $n.Trim()
+              if ($t) { [void]$skipSet.Add($t) }
+            }
+          }
+          Write-Host "Skip baseline count = $($skipSet.Count)"
+
+          # Object-based detection. Capture ONLY the success stream
+          # (stream 1) -- the reconciler returns its categorized
+          # [pscustomobject] rows (.Category / .Name / .Reason) as the
+          # pipeline output; its progress lines go to the Information
+          # stream (6) and are not captured here. -DirectionPolicy audit
+          # forces read-only ($WhatIfPreference); no write fires.
+          # Reference: docs/adr/0029-source-of-truth-direction-policy.md
+          $rows = @(./scripts/Deploy-IRMPolicies.ps1 -DirectionPolicy audit)
+
+          # Drift = "would change" categories, minus the skip baseline.
+          # In audit mode the reconciler emits Create / Update / Orphan
+          # for would-be writes, NoChange for in-sync, Failed for caught
+          # exceptions. NoChange and Skipped are never drift.
+          $driftCategories = @('Create', 'Update', 'Orphan', 'Failed')
+          $drift = @($rows | Where-Object {
+            $_.Category -in $driftCategories -and
+            -not $skipSet.Contains([string]$_.Name)
+          })
+
+          Write-Host "Returned rows = $($rows.Count); drift rows = $($drift.Count)"
+
+          if ($drift.Count -eq 0) {
+            Add-Content -Path $env:GITHUB_OUTPUT -Value 'drift=false'
+            Write-Host '::notice::No IRM policy drift detected. Tenant matches data-plane/irm/policies.yaml (skip baseline suppressed).'
+            return
+          }
+
+          # Build a readable Markdown table for the issue body.
+          $sb = [System.Text.StringBuilder]::new()
+          [void]$sb.AppendLine('## Summary')
+          [void]$sb.AppendLine('')
+          [void]$sb.AppendLine('The scheduled Insider Risk Management reverse drift-detection companion detected drift between the desired-state `data-plane/irm/policies.yaml` and the live `contoso.onmicrosoft.com` tenant.')
+          [void]$sb.AppendLine('')
+          [void]$sb.AppendLine('This issue was opened automatically by `.github/workflows/sync-irm-from-tenant.yml`.')
+          [void]$sb.AppendLine('')
+          [void]$sb.AppendLine('> **Read-only.** Drift was detected in ADR 0029 **audit mode** (`-DirectionPolicy audit`). No `New-`/`Set-`/`Remove-InsiderRiskPolicy` write fired against the tenant. This is a report, not a change.')
+          [void]$sb.AppendLine('')
+          [void]$sb.AppendLine('## Drift report')
+          [void]$sb.AppendLine('')
+          [void]$sb.AppendLine('| Category | Name | Reason |')
+          [void]$sb.AppendLine('|---|---|---|')
+          foreach ($d in $drift) {
+            $name   = ([string]$d.Name)   -replace '\|', '\|'
+            $reason = ([string]$d.Reason) -replace '\|', '\|'
+            [void]$sb.AppendLine("| $($d.Category) | $name | $reason |")
+          }
+          [void]$sb.AppendLine('')
+          [void]$sb.AppendLine('## Why an issue and not a pull request')
+          [void]$sb.AppendLine('')
+          [void]$sb.AppendLine('Insider Risk Management is a Tier-3 surface: `scripts/Deploy-IRMPolicies.ps1` exposes no `-ExportCurrentState` switch, so tenant state cannot be round-tripped back into `data-plane/irm/policies.yaml` as a re-export PR. Reconcile by hand instead.')
+          [void]$sb.AppendLine('')
+          [void]$sb.AppendLine('## Next steps')
+          [void]$sb.AppendLine('')
+          [void]$sb.AppendLine('1. Review this run for the full audit-mode plan: ' + $runUrl)
+          [void]$sb.AppendLine('2. Decide how to reconcile each drifted policy:')
+          [void]$sb.AppendLine('   - **Accept into source** — add / update the entry in `data-plane/irm/policies.yaml`, then let the `Deploy IRM policies` step of `deploy-data-plane.yml` converge.')
+          [void]$sb.AppendLine('   - **Overwrite the portal** — dispatch `deploy-data-plane.yml` with `irm_direction_policy=repo-wins` and the typed `confirm_overwrite_irm=overwrite portal` token.')
+          [void]$sb.AppendLine('   - **Ratify the deviation** — extend the `skip_names_irm` baseline (and ADR 0036) if the policy is intentionally portal-owned.')
+          [void]$sb.AppendLine('3. Close this issue once the drift is resolved. The next scheduled run reopens a fresh issue only if drift remains.')
+          [void]$sb.AppendLine('')
+          [void]$sb.AppendLine('## References')
+          [void]$sb.AppendLine('')
+          [void]$sb.AppendLine('- [ADR 0029 — Source-of-truth direction policy](../blob/main/docs/adr/0029-source-of-truth-direction-policy.md)')
+          [void]$sb.AppendLine('- [ADR 0036 — IRM tenant-setting immovable](../blob/main/docs/adr/0036-irm-tenant-setting-immovable.md)')
+          [void]$sb.AppendLine('- [Microsoft Purview Insider Risk Management](https://learn.microsoft.com/en-us/purview/insider-risk-management)')
+
+          Set-Content -Path irm-drift-issue-body.md -Value $sb.ToString() -Encoding utf8
+
+          Add-Content -Path $env:GITHUB_OUTPUT -Value 'drift=true'
+          Add-Content -Path $env:GITHUB_OUTPUT -Value "count=$($drift.Count)"
+          Write-Host "::warning::IRM policy drift detected ($($drift.Count) object(s)). An issue will be opened."
+        # $runUrl is provided via env so the interpolation stays outside
+        # the run shell-quoting boundary.
+        # Reference: https://docs.github.com/en/actions/security-guides/security-hardening-for-github-actions#understanding-the-risk-of-script-injections
+
+      - name: Open or refresh drift-detection issue
+        if: steps.detect.outputs.drift == 'true'
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          DRIFT_COUNT: ${{ steps.detect.outputs.count }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+
+          # Self-provision issue labels. `gh issue create --label <name>`
+          # fails the whole call if any referenced label is missing, and
+          # `gh label create` fails on an existing label -- so create
+          # ONLY the missing ones.
+          # Reference: https://cli.github.com/manual/gh_label_create
+          $wanted = @{
+            'drift-detected'            = @{ color = 'B60205'; desc = 'Drift detected between desired-state YAML and the live tenant' }
+            'needs-review'              = @{ color = 'FBCA04'; desc = 'Awaiting lab-owner review' }
+            'squad:automation-engineer' = @{ color = '0E8A16'; desc = 'Owned by the Automation Engineer squad persona' }
+          }
+          $existing = @(gh label list --limit 200 --json name --jq '.[].name')
+          $existingSet = [System.Collections.Generic.HashSet[string]]::new(
+            [System.StringComparer]::OrdinalIgnoreCase)
+          foreach ($e in $existing) { [void]$existingSet.Add($e) }
+
+          foreach ($name in $wanted.Keys) {
+            if ($existingSet.Contains($name)) {
+              Write-Host "Label '$name' already exists; skipping create."
+              continue
+            }
+            $meta = $wanted[$name]
+            Write-Host "Creating missing label '$name'."
+            gh label create $name --color $meta.color --description $meta.desc
+          }
+
+          # Idempotency guard: if an open drift issue for this surface
+          # already exists, refresh it with a comment instead of opening
+          # a duplicate.
+          $title = 'IRM policy drift detected in contoso.onmicrosoft.com tenant'
+          # `// empty` so an empty result set yields no output (not the
+          # literal string "null", which is truthy in PowerShell).
+          $open = (gh issue list `
+            --state open `
+            --label 'drift-detected' `
+            --label 'squad:automation-engineer' `
+            --search 'IRM policy drift in:title' `
+            --json number `
+            --jq '.[0].number // empty' | Out-String).Trim()
+
+          if ($open) {
+            Write-Host "::notice::Open IRM drift issue #$open already exists; adding a refresh comment."
+            $comment = "Drift still present as of the latest scheduled audit-mode run ($($env:DRIFT_COUNT) object(s)). See $($env:RUN_URL)."
+            gh issue comment $open --body $comment
+          } else {
+            $new = gh issue create `
+              --title $title `
+              --body-file irm-drift-issue-body.md `
+              --label 'drift-detected' `
+              --label 'needs-review' `
+              --label 'squad:automation-engineer'
+            Write-Host "::notice::Opened IRM drift issue: $new"
+          }
+
+      - name: Restore Key Vault network defaults
+        if: always() && steps.kv-open.outputs.opened == 'true'
+        shell: pwsh
+        run: |
+          # Reference: https://learn.microsoft.com/en-us/cli/azure/keyvault#az-keyvault-update
+          az keyvault update `
+            --name $env:KEY_VAULT_NAME `
+            --public-network-access Disabled `
+            --default-action Deny `
+            --only-show-errors `
+            -o none
+
+      - name: Summarize result
+        if: always()
+        shell: pwsh
+        env:
+          DRIFT_DETECTED: ${{ steps.detect.outputs.drift }}
+          DRIFT_COUNT: ${{ steps.detect.outputs.count }}
+        run: |
+          if ($env:DRIFT_DETECTED -eq 'true') {
+            Write-Host "::notice::IRM drift detected ($($env:DRIFT_COUNT) object(s)). Review the issue for details."
+          } elseif ($env:DRIFT_DETECTED -eq 'false') {
+            Write-Host "::notice::No IRM drift detected. Tenant matches desired state."
+          } else {
+            Write-Host "::warning::IRM drift detection did not complete (job failed before the detect step finished)."
+          }
