@@ -115,11 +115,61 @@ The `Deploy IRM policies` step in [`.github/workflows/deploy-data-plane.yml`](..
 
 A fail-fast `Validate IRM dispatch inputs` step runs before Azure login and rejects a `repo-wins` dispatch without the typed token.
 
+## Reverse drift-detection (Tier-3 — issue, not PR)
+
+The forward apply leg above is paired with a reverse companion,
+[`.github/workflows/sync-irm-from-tenant.yml`](../../../.github/workflows/sync-irm-from-tenant.yml),
+that watches for portal-only edits to the IRM policy surface. It runs
+daily (08:00 UTC) plus on demand.
+
+IRM is a **Tier-3** surface: `Deploy-IRMPolicies.ps1` exposes no
+`-ExportCurrentState` (and no `-VerifyPublished`) switch, so — unlike
+the sensitivity-label, auto-label, and DLP surfaces — the reverse leg
+**cannot** round-trip tenant state back into
+[`data-plane/irm/policies.yaml`](../../../data-plane/irm/policies.yaml)
+as a re-export pull request. Instead it opens a GitHub **issue** so a
+human reconciles by hand. The workflow declares
+`permissions: issues: write` (no `pull-requests` scope).
+
+How it detects drift, without the pitfalls of the retired generic
+`drift-detection.yml`:
+
+- **Audit mode, always.** The reconciler is invoked with
+  `-DirectionPolicy audit`, which forces `$WhatIfPreference` so every
+  `New-`/`Set-`/`Remove-InsiderRiskPolicy` short-circuits to its
+  "Would …" branch. No write fires ([ADR 0029](../../adr/0029-source-of-truth-direction-policy.md)).
+  It does **not** use `portal-wins -WhatIf`, which would mask an
+  `Update` as a `Skip`.
+- **Object-based, not text-scraped.** It captures the reconciler's
+  returned `[pscustomobject]` rows from the success stream (stream 1)
+  and filters on `.Category` / `.Name` / `.Reason`. Drift is any row
+  whose `Category` is `Create`, `Update`, `Orphan`, or `Failed`. It
+  never greps stdout/stderr and never relies on `2>&1`.
+- **Skip baseline is a post-filter.** `-SkipNames` is inert in audit
+  mode (the audit short-circuit runs before the ADR 0029 skip pass),
+  so the workflow does **not** pass `-SkipNames`. It removes the
+  [ADR 0036](../../adr/0036-irm-tenant-setting-immovable.md) baseline
+  names from the returned rows after the fact. The `skip_names_irm`
+  input default mirrors the `deploy-data-plane.yml` default verbatim.
+- **Self-provisioned labels.** `gh issue create --label <name>` fails
+  the whole call if a referenced label is missing (a fresh fork lacks
+  `drift-detected`), so the issue step reads the existing label set and
+  creates only the missing labels before creating the issue. The issue
+  carries `drift-detected`, `needs-review`, and
+  `squad:automation-engineer`.
+- **Idempotent.** If an open IRM drift issue already exists, the run
+  adds a refresh comment instead of opening a duplicate.
+
+```pwsh
+gh workflow run sync-irm-from-tenant.yml
+```
+
 ## Related ADRs and runbooks
 
 - [ADR 0029 — Source-of-truth direction policy](../../adr/0029-source-of-truth-direction-policy.md)
 - [ADR 0036 — IRM tenant-setting immovable](../../adr/0036-irm-tenant-setting-immovable.md)
 - [Runbook — IRM end-to-end smoke](../../runbooks/irm-end-to-end-smoke.md)
+- Reverse companion workflow: [`sync-irm-from-tenant.yml`](../../../.github/workflows/sync-irm-from-tenant.yml)
 - Sibling solution: [`records-management.md`](records-management.md)
 
 ## Follow-ups
