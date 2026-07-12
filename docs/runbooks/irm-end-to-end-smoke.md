@@ -170,6 +170,33 @@ Remove-InsiderRiskPolicy -Identity $name -Confirm:$false
 Expected: cmdlet returns no output; subsequent `Get-InsiderRiskPolicy -Identity $name`
 throws `ManagementObjectNotFoundException`.
 
+## Scheduled reverse drift-detection (CI, no operator action)
+
+Between manual smoke runs, the reverse companion workflow
+[`.github/workflows/sync-irm-from-tenant.yml`](../../.github/workflows/sync-irm-from-tenant.yml)
+watches the same surface daily (08:00 UTC). Because IRM is a Tier-3
+surface (no `-ExportCurrentState` on
+[`Deploy-IRMPolicies.ps1`](../../scripts/Deploy-IRMPolicies.ps1)), it
+**cannot** open a re-export PR the way the label / auto-label / DLP
+sync workflows do. Instead it runs the reconciler in read-only ADR 0029
+audit mode, captures the returned `[pscustomobject]` rows from stream 1,
+post-filters the ADR 0036 skip baseline, and opens a GitHub **issue**
+(labels `drift-detected`, `needs-review`, `squad:automation-engineer`,
+self-provisioning any that are missing) when a `Create` / `Update` /
+`Orphan` / `Failed` row survives the filter.
+
+Relationship to this runbook:
+
+- The workflow is the automated watch loop; **this runbook is the
+  operator response** when it fires. Triage with Step 1
+  (`-DirectionPolicy audit`), then reconcile per the issue's "Next
+  steps" (accept into YAML, `repo-wins` overwrite, or extend the skip
+  baseline + ADR 0036).
+- The workflow never writes to the tenant and never mutates a
+  pre-existing live policy, so it is safe to leave enabled during the
+  issue #603 mid-testing window.
+- To trigger it on demand: `gh workflow run sync-irm-from-tenant.yml`.
+
 ## Safety constraints
 
 - **Never** invoke `Set-InsiderRiskPolicy`, `Remove-InsiderRiskPolicy`,
@@ -189,4 +216,5 @@ throws `ManagementObjectNotFoundException`.
 - [Remove-InsiderRiskPolicy](https://learn.microsoft.com/en-us/powershell/module/exchange/remove-insiderriskpolicy)
 - [ADR 0029](../adr/0029-source-of-truth-direction-policy.md)
 - [ADR 0036](../adr/0036-irm-tenant-setting-immovable.md)
+- Reverse companion workflow: [`sync-irm-from-tenant.yml`](../../.github/workflows/sync-irm-from-tenant.yml)
 - [Sibling runbook: records-end-to-end-smoke.md](records-end-to-end-smoke.md)
