@@ -60,6 +60,21 @@ We will ship auto-labeling policies under the following shape, all subject to th
     - The cmdlet's stock `WARNING: Any updates to auto labeling policy requires simulation to be restarted...` fires on every `Enable`-mode Create/Update regardless. This is Microsoft-side noise; the reconciler does not invoke `-StartSimulation` and the warning has no effect for Enable.
     - `Enable`-mode policies do not require an Exchange transport-rule companion; `-VerifyPublished` Pass on a freshly-created `Enable`-mode policy is sufficient evidence the policy is published.
 
+12. **Export-scope exclusion + NoChange-only location semantics (round-trip fix).** The closed loop — portal change → `-ExportCurrentState` → sync PR → `-Apply` — must reverse-export only tenant state that the reconciler can then forward-apply. Two defects broke that loop; both are fixed here.
+
+    - **Exporter skips non-representable rules and their orphaned policies.** This ADR (Decisions 4, 5) models only SIT-based `contentContainsSensitiveInformation` (CCSI). A tenant rule whose conditions resolve to an empty CCSI — Exact Data Match (EDM), trainable classifier, document fingerprint, or any non-CCSI condition — is non-representable in this schema. Before this fix, `-ExportCurrentState` emitted every tenant rule (including those that resolve to an empty CCSI) plus their parent policies; those entries then failed the schema's CCSI `minItems: 1` floor and the reconciler's non-empty-CCSI forward-apply guard on the very next deploy. The exporter now builds rules **first** and skips any rule whose resolved CCSI is empty (one `Write-Warning` per skip), then builds policies **second** and skips any policy left with zero surviving (representable) rules (one `Write-Warning` per skip). The non-representable rules and policies are reported as **skipped orphans**, not written to YAML. The CCSI `minItems: 1` schema floor and the non-empty-CCSI script guard are retained — the exporter simply never emits an empty-CCSI rule in the first place.
+
+    - **`exchangeLocation` floors relaxed so SharePoint/OneDrive-only policies round-trip.** A SP/OD-scoped auto-label policy legitimately has no Exchange scope and exports as `exchangeLocation: []`. Before this fix, two independent floors rejected that valid shape:
+      1. The schema carried `minItems: 1` on `exchangeLocation`. **Removed** (the CCSI `minItems: 1` floor is unaffected).
+      2. The reconciler's forward-apply input-validation guard treated `[]` / absent as "missing" and errored before diffing, so even a NoChange reconverge failed. **Relaxed** to require the `exchangeLocation` key to be present but allow an empty array. The sibling `Deploy-LabelPolicies.ps1` has no such guard at all — that is the reference shape.
+
+    - **NoChange-only location semantics.** Both hash converters (`ConvertTo-PolicyHash`, `ConvertTo-TenantPolicyHash`) default `exchangeLocation` to `@()`, so for a SP/OD-only policy desired `[]` == tenant `[]` → NoChange and **no cmdlet fires**. Where a location write would otherwise fire:
+      - **On Create**, `-ExchangeLocation` is included only when the desired value is non-empty. An empty value emits a warning and omits the parameter; `New-AutoSensitivityLabelPolicy` then fails loudly on the genuinely-missing location, because SP/OD location fields are deferred (Decision 2).
+      - **On Update**, the `-ExchangeLocation` write is skipped when the desired value is empty (warn, do not clear the tenant scope).
+
+    SharePoint/OneDrive location *fields* (`SharePointLocation`, `OneDriveLocation`) remain out of scope per Decision 2 — this section only makes an empty Exchange scope representable so a SP/OD-only policy authored in the portal can be exported and re-applied as all-NoChange without the reconciler stranding or clearing it.
+
+
 ## Consequences
 
 **Easier:**

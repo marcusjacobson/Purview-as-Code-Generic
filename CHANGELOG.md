@@ -16,6 +16,17 @@ To add an entry:
 3. **Bullet.** Add `- **<scope>:** <subject> (#NNN)` at the top of that category, where `<scope>` is the commit scope, `<subject>` is the Conventional-Commit subject without its `type(scope):` prefix, and `#NNN` is the originating issue number. Historical entries reference the squash-merge PR instead; either renders as a link on GitHub.
 4. **Exemption.** A PR whose only change is this file (a manual changelog fix) does not add an entry for itself.
 
+## 2026-07-12
+
+### Fixed
+
+- **scripts:** make `Deploy-AutoLabelPolicies.ps1` round-trip exportable state — `-ExportCurrentState` now builds rules first and skips any whose resolved `contentContainsSensitiveInformation` is empty (EDM / trainable classifier / document fingerprint), then skips parent policies left with zero surviving rules, reporting both as skipped orphans instead of emitting entries that fail the CCSI `minItems:1` floor on the next deploy (ADR 0016 §12) (#57)
+- **policies:** remove the `minItems: 1` floor on `exchangeLocation` in `auto-label-policies.schema.json`, and relax the reconciler's forward-apply input guard to require the key present but allow an empty array, so a SharePoint/OneDrive-only policy's `exchangeLocation: []` round-trips; empty-location writes are gated (Create omits `-ExchangeLocation`, Update skips it) so desired `[]` == tenant `[]` → NoChange (ADR 0016 §12) (#57)
+
+### Documentation
+
+- **docs:** add ADR 0016 §12 (export-scope exclusion + NoChange-only location semantics), a round-trip/scope section in the auto-label-policies solution guide, and export-scope notes in the YAML header (#57)
+
 ## 2026-07-11
 
 ### Fixed
