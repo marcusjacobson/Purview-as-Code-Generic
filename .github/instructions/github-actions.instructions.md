@@ -80,6 +80,19 @@ Required surface:
 
 The reconciler script side of this contract lives in [`powershell.instructions.md`](powershell.instructions.md#direction-policy-contract-adr-0029).
 
+#### Tier-3 (export-incapable) surfaces
+
+The two-pass enumerate + auto-PR drift-back requirements above assume the reconciler is **export-capable** — it exposes `-ExportCurrentState` so tenant state can be round-tripped back into `data-plane/**` YAML as a re-export PR. That assumption does not hold for **Tier-3** surfaces whose underlying cmdlet family has no bulk-export or publish-status equivalent (for example, the `*-InsiderRiskPolicy` family behind [`Deploy-IRMPolicies.ps1`](../workflows/deploy-irm.yml), which exposes **no** `-ExportCurrentState` and **no** `-VerifyPublished` and is on the full-circle reconciler-contract-guard exempt list in [`validate.yml`](../workflows/validate.yml)).
+
+For a Tier-3 forward `deploy-<domain>.yml`, apply the following carve-out. Reference implementation: [`deploy-irm.yml`](../workflows/deploy-irm.yml) (proven end-to-end on `contoso.onmicrosoft.com`; forward twin of the issue-based reverse companion [`sync-irm-from-tenant.yml`](../workflows/sync-irm-from-tenant.yml)).
+
+- **Single apply pass, no enumerate.** The skip list is the **static** ADR-baseline set (e.g. the [ADR 0036](../../docs/adr/0036-irm-tenant-setting-immovable.md) IRM baseline), not a drift-derived set, so there is nothing to enumerate. Invoke the reconciler once with `-DirectionPolicy <mode> -SkipNames @(...)`. There is **no** `-WhatIf` enumerate pass and **no** `[ADR0029-SKIP]` marker parsing.
+- **No auto-PR drift-back job.** A Tier-3 reconciler cannot re-export, so there is no YAML to regenerate and no drift-back PR to open. Reverse drift is surfaced as a GitHub **issue** by the companion `sync-<domain>-from-tenant.yml`, not a PR. The workflow therefore holds **no** `contents: write` and **no** `pull-requests` scope.
+- **No Verify-Published step.** Same omission already accepted for `deploy-dlp.yml` (DLP has no `-VerifyPublished` switch). The apply pass is the terminal write step.
+- **Single apply job.** No least-privilege job split is required because there is no PR-opening job; the one `apply` job declares `id-token: write` + `contents: read` only, under workflow-scope `permissions: {}`.
+
+Everything else in the ADR 0029 contract still applies to Tier-3 workflows: the `workflow_dispatch` inputs (`<domain>_direction_policy`, `confirm_overwrite_<domain>`, `skip_names_<domain>`), the pre-flight typed-confirmation gate for `repo-wins`, read-only `audit` mode, the `push`-uses-defaults behavior, `concurrency`, and the Key Vault temp-open/restore window.
+
 ## Concurrency
 
 - Deploy workflows set `concurrency:` with a group scoped to the environment and `cancel-in-progress: false` so two merges cannot race on the same Purview account.
