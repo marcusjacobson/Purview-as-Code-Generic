@@ -36,8 +36,18 @@
 #                             bare `<displayName>` for top-level). The
 #                             reconciler resolves to a label GUID via
 #                             Get-Label at Apply time.
-#     exchangeLocation    : (list of strings, required) `[All]` or a
-#                             list of mailbox SMTP addresses.
+#     exchangeLocation    : (list of strings, required KEY; may be an
+#                             empty array) `[All]` or a list of mailbox
+#                             SMTP addresses. A SharePoint/OneDrive-only
+#                             policy sets `exchangeLocation: []` -- the
+#                             key must be present but the array may be
+#                             empty (ADR 0016 section 12). Empty desired
+#                             `[]` == tenant `[]` -> NoChange (no cmdlet
+#                             fires). On Create an empty value omits
+#                             `-ExchangeLocation` (New-* then fails on
+#                             the genuinely-missing location); on Update
+#                             an empty value skips the location write
+#                             (never clears the tenant scope).
 #     advancedSettings    : (map, optional) MUST be empty per ADR 0016
 #                             section 5; the allowlist is `@()`. Adding
 #                             the first key requires a follow-up issue
@@ -86,6 +96,20 @@
 #   drift. Mandatory first-run contract per
 #   `.github/instructions/powershell.instructions.md` ("First-run-
 #   against-an-existing-tenant contract") and ADR 0016 section 8.
+#
+# Export-scope exclusion (`-ExportCurrentState`, ADR 0016 section 12):
+#   The exporter reverse-writes only tenant state the reconciler can
+#   forward-apply. Rules whose conditions resolve to an EMPTY
+#   contentContainsSensitiveInformation -- Exact Data Match (EDM),
+#   trainable classifier, document fingerprint, or any non-SIT
+#   condition -- are non-representable in this schema. `-ExportCurrentState`
+#   skips them (warn per skip) and skips any parent policy left with
+#   zero surviving rules, reporting both as skipped orphans rather than
+#   writing entries that would fail the CCSI `minItems: 1` floor on the
+#   next `-Apply`. After a reverse export of a tenant that mixes
+#   SIT-based and EDM/ML/fingerprint policies, the regenerated YAML
+#   forward-deploys to all-NoChange for the representable (SIT,
+#   SP/OD-scoped) policies.
 #
 # Out of scope for this file (per ADR 0016):
 #   - SharePointLocation, OneDriveLocation, Teams*Location -- additive

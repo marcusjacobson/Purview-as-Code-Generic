@@ -518,3 +518,134 @@ Describe 'Resolve-DesiredRuleWorkload — preserve human-authored workload on ex
         }
     }
 }
+
+Describe 'Export-scope exclusion — rule/policy skip predicates (ADR 0016 §12)' {
+
+    BeforeAll {
+        # AST-extract the two inline export skip predicates by their
+        # condition text and evaluate them standalone (no script import,
+        # no tenant). The predicates live inside the -ExportCurrentState
+        # region, not in a named function, so we locate the specific
+        # IfStatementAst nodes by their condition extent text.
+        $tokens = $null
+        $errors = $null
+        $ast = [System.Management.Automation.Language.Parser]::ParseFile(
+            $script:ScriptPath, [ref]$tokens, [ref]$errors)
+
+        $ifAsts = $ast.FindAll({
+                param($node)
+                $node -is [System.Management.Automation.Language.IfStatementAst]
+            }, $true)
+
+        $ruleIf = $ifAsts | Where-Object {
+            $_.Clauses[0].Item1.Extent.Text -match '@\(\$rh\.ccsi\)\.Count\s*-eq\s*0'
+        } | Select-Object -First 1
+        if (-not $ruleIf) { throw 'rule-skip predicate (@($rh.ccsi).Count -eq 0) not found in export block' }
+        $script:RuleSkipPredicate = [ScriptBlock]::Create(
+            'param($rh) ' + $ruleIf.Clauses[0].Item1.Extent.Text)
+
+        $policyIf = $ifAsts | Where-Object {
+            $_.Clauses[0].Item1.Extent.Text -match '-not\s+\$representablePolicyNames\.Contains\(\$h\.name\)'
+        } | Select-Object -First 1
+        if (-not $policyIf) { throw 'policy-skip predicate (-not $representablePolicyNames.Contains($h.name)) not found in export block' }
+        $script:PolicySkipPredicate = [ScriptBlock]::Create(
+            'param($representablePolicyNames, $h) ' + $policyIf.Clauses[0].Item1.Extent.Text)
+    }
+
+    Context 'Rule skip predicate (empty resolved CCSI)' {
+
+        It 'skips a rule whose resolved CCSI is empty (EDM / ML / fingerprint)' {
+            (& $script:RuleSkipPredicate -rh @{ ccsi = @() }) | Should -BeTrue
+        }
+
+        It 'keeps a rule with a single SIT triplet' {
+            (& $script:RuleSkipPredicate -rh @{ ccsi = @('00000000-0000-0000-0000-000000000001|1|75') }) | Should -BeFalse
+        }
+
+        It 'keeps a rule with multiple SIT triplets' {
+            (& $script:RuleSkipPredicate -rh @{ ccsi = @(
+                        '00000000-0000-0000-0000-000000000001|1|75'
+                        '00000000-0000-0000-0000-000000000002|2|85'
+                    ) }) | Should -BeFalse
+        }
+    }
+
+    Context 'Policy skip predicate (zero surviving rules)' {
+
+        It 'skips a policy absent from the representable-policy set' {
+            $set = New-Object 'System.Collections.Generic.HashSet[string]'
+            (& $script:PolicySkipPredicate -representablePolicyNames $set -h @{ name = 'Lab-AutoLabel-EDM' }) | Should -BeTrue
+        }
+
+        It 'keeps a policy present in the representable-policy set' {
+            $set = New-Object 'System.Collections.Generic.HashSet[string]'
+            [void]$set.Add('Lab-AutoLabel-CreditCards')
+            (& $script:PolicySkipPredicate -representablePolicyNames $set -h @{ name = 'Lab-AutoLabel-CreditCards' }) | Should -BeFalse
+        }
+
+        It 'is case-sensitive on the policy name (matches the tenant readback verbatim)' {
+            $set = New-Object 'System.Collections.Generic.HashSet[string]'
+            [void]$set.Add('Lab-AutoLabel-CreditCards')
+            (& $script:PolicySkipPredicate -representablePolicyNames $set -h @{ name = 'lab-autolabel-creditcards' }) | Should -BeTrue
+        }
+    }
+}
+
+Describe 'Round-trip source-text guards (ADR 0016 §12)' {
+
+    BeforeAll {
+        $script:ScriptText = Get-Content -LiteralPath $script:ScriptPath -Raw
+    }
+
+    Context 'Export ordering and skip warnings' {
+
+        It 'builds the rule export list before the policy export list (rules-first skip ordering)' {
+            $ruleIdx   = $script:ScriptText.IndexOf('$ruleExport = New-Object')
+            $policyIdx = $script:ScriptText.IndexOf('$policyExport = New-Object')
+            $ruleIdx   | Should -BeGreaterThan 0
+            $policyIdx | Should -BeGreaterThan 0
+            $ruleIdx   | Should -BeLessThan $policyIdx
+        }
+
+        It 'tracks surviving policy names via a representablePolicyNames HashSet' {
+            $script:ScriptText | Should -Match '\$representablePolicyNames\s*=\s*New-Object\s+''System\.Collections\.Generic\.HashSet\[string\]'''
+            $script:ScriptText | Should -Match '\[void\]\$representablePolicyNames\.Add\(\$rh\.policy\)'
+        }
+
+        It 'warns per skipped non-representable rule' {
+            $script:ScriptText | Should -Match 'Skipping non-representable auto-label rule'
+        }
+
+        It 'warns per skipped non-representable policy' {
+            $script:ScriptText | Should -Match 'Skipping non-representable auto-label policy'
+        }
+    }
+
+    Context 'Relaxed exchangeLocation input validation' {
+
+        It 'requires the exchangeLocation key present but allows an empty array' {
+            $script:ScriptText | Should -Match 'if \(-not \$e\.ContainsKey\(''exchangeLocation''\)\) \{'
+        }
+
+        It 'no longer rejects an empty exchangeLocation array in the input guard' {
+            $script:ScriptText | Should -Not -Match '-not \$e\.exchangeLocation -or @\(\$e\.exchangeLocation\)\.Count -eq 0'
+        }
+    }
+
+    Context 'Conditional Create / Update exchangeLocation arguments' {
+
+        It 'includes -ExchangeLocation on Create only when the desired value is non-empty' {
+            $script:ScriptText | Should -Match 'if \(@\(\$d\.exchangeLocation\)\.Count -gt 0\) \{'
+            $script:ScriptText | Should -Match '\$newArgs\[''ExchangeLocation''\]\s*=\s*\$d\.exchangeLocation'
+        }
+
+        It 'no longer hardcodes ExchangeLocation in the Create argument splat' {
+            $script:ScriptText | Should -Not -Match 'ExchangeLocation\s+=\s+\$d\.exchangeLocation\s+Mode\s+='
+        }
+
+        It 'skips the -ExchangeLocation write on Update when the desired value is empty' {
+            $script:ScriptText | Should -Match 'if \(@\(\$d\.exchangeLocation\)\.Count -eq 0\) \{'
+            $script:ScriptText | Should -Match 'skipping the -ExchangeLocation write to avoid clearing the tenant scope'
+        }
+    }
+}
