@@ -70,15 +70,31 @@ The condition it set is not future. It is met, and it was met when the sentence 
 
 ### 3. The `Conflict` row is always emitted; the switch authorises the overwrite, it does not hide the finding
 
-This is the substantive behaviour change, and it is a deliberate strengthening beyond a pure rebind. Under Mechanism A the Conflict row used to *vanish* when the override was engaged. It no longer does. Whenever tracked-field drift coincides with foreign authorship, the reconciler emits a `Conflict` row **regardless of `-OverwriteForeignAuthor`**, and the switch decides only whether the write proceeds:
+This is the substantive behaviour change, and it is a deliberate strengthening beyond a pure rebind. Under Mechanism A the Conflict row used to *vanish* when the override was engaged. It no longer does. Whenever tracked-field drift coincides with foreign authorship, the reconciler classifies the object as a `Conflict` **regardless of `-OverwriteForeignAuthor`**, and the switch decides only whether the write proceeds:
 
 | | `Conflict` row emitted | Object overwritten |
 |---|---|---|
 | neither switch | yes | no |
 | `-Force` alone | **yes** (was: no) | **no** (was: yes) |
-| `-OverwriteForeignAuthor` | yes | yes |
+| `-OverwriteForeignAuthor` | **yes** | yes |
 
-A safety override that erases the evidence that it fired is not an override, it is a laundering step. Mechanism B already had this right; Mechanism A is brought up to it.
+**The invariant, stated so it cannot be satisfied by accident:** *a write over a foreign-authored object is **always** reported as a `Conflict` row — it is never laundered into a plain `Update`.* The switch grants **permission, not silence**. A safety override that erases the evidence that it fired is not an override, it is a laundering step.
+
+**Interaction with `-DirectionPolicy` (ADR 0029), stated rather than glossed.** The two are independent axes and **both** must permit a write. Under the default `portal-wins`, a drifted object is skipped whatever its authorship, so `-OverwriteForeignAuthor` alone changes nothing and the row reports as `Skip`. Overwriting a foreign-authored object therefore requires **`-DirectionPolicy repo-wins -OverwriteForeignAuthor`** — content authority *and* ownership authority, requested separately. See Alternatives 4.
+
+#### How Mechanism A is implemented — and the trap that was walked into first
+
+The obvious fix is to rebind `Test-ConflictRow`'s `-ForceEnabled` parameter to `-OverwriteForeignAuthor`. **That fix is wrong, and it was written before it was caught.** The function opened with `if ($ForceEnabled) { return $false }` — a *suppress-at-source* short-circuit. Renaming its input preserves the short-circuit exactly: under `-OverwriteForeignAuthor` the predicate returns `$false`, the plan builder falls through to `Action = 'Update'`, the object is overwritten **and the `Conflict` row vanishes from the drift report**. That is precisely the alternative this ADR rejects by name in Alternatives 5. It passes a test suite that only ever asserts the *no-override* path — which is exactly the shape the first attempt's tests had.
+
+The correct decomposition, and the one implemented:
+
+1. **`Test-ConflictRow` is a *pure authorship predicate*.** It takes `(TenantRaw, DeployIdentity)` and **nothing else**. It has no parameter for any override switch, so it is structurally incapable of suppressing its own finding.
+2. **`Resolve-ConflictPlanAction` owns the override decision**, purely: given `(IsConflict, OverwriteForeignAuthor, DriftText, Who)` it returns the plan `Action`, the report `Category`, a `Conflict` flag, and the `Reason`. When authorship differs it returns `Category = 'Conflict'` in **both** branches, varying only `Action` (`'Conflict'` → no write; `'Update'` → write).
+3. **The apply loop derives the report category from the row's `Conflict` flag**, so a `Conflict`-flagged `Update` reports as `Conflict`. Without this third step the plan would be right and the drift report would still lie.
+
+This mirrors Mechanism B's `Get-ReconciliationPlan`, which had the shape right from the start — its `Test-IsConflict` is genuinely pure and its override lives at the call site. Mechanism A is now brought up to it, structurally and not just by renaming.
+
+The generalisable rule: **a predicate that can be told to return `$false` is not a predicate, it is a switch with extra steps.** Purity is what makes "the row is always emitted" enforceable rather than merely intended.
 
 ### 4. Both `$ConfirmPreference = 'None'` self-disarms are deleted
 
@@ -140,6 +156,7 @@ And `-Force` in `Deploy-RoleGroupBackingEntraGroups.ps1` means a **third** thing
 
 - **An operator who genuinely wants to overwrite portal-authored objects must now type a second, longer switch.** Intentional. It is a 22-character switch guarding an irreversible clobber of someone else's work, and it is now greppable in CI logs and runbooks in a way `-Force` never was.
 - **`Deploy-UnifiedCatalogPolicies.ps1` now prompts per write on a local `-Force` run.** It is at `ConfirmImpact = 'High'` and its self-disarm is gone, so `ShouldProcess` is live. CI is unaffected (every workflow caller binds `-Confirm:$false`), but a local operator who relied on `-Force` to run that script unattended must now bind `-Confirm:$false` explicitly. This is the ADR 0052 §7 consent signal working as designed, and it is a **loud** change (a prompt), not a silent one.
+- **Overwriting a foreign-authored object now needs TWO switches, not one.** `-DirectionPolicy repo-wins -OverwriteForeignAuthor`. Under the default `portal-wins` the object is skipped whatever its authorship, so `-OverwriteForeignAuthor` on its own is inert and reports `Skip`. This is deliberate (Decision 3, Alternatives 4) — content authority and ownership authority are different grants — but it is a real ergonomic cost and an operator who passes only `-OverwriteForeignAuthor` and sees nothing happen is not misreading the tool.
 - **The `Conflict` category remains overloaded** until the deferred rename lands, and #84 must be written around that.
 - **[`powershell.instructions.md`](../../.github/instructions/powershell.instructions.md) has now been corrected twice** on the same lines in two consecutive ADRs. The second correction is the durable one because it is the one grounded in the code rather than in a comment about the code.
 
@@ -147,7 +164,7 @@ And `-Force` in `Deploy-RoleGroupBackingEntraGroups.ps1` means a **third** thing
 
 - **#1 (no secrets in source).** Unchanged. Authorship fields are principal identifiers already returned by the API and already printed in existing `Conflict` rows; no new identifier class is surfaced.
 - **#4 (least privilege).** **Strengthened.** `-Force` no longer confers an authority the operator did not ask for. The authority to overwrite another principal's work is now separately requested and separately granted.
-- **#9 (idempotent, reversible, auditable).** **Strengthened, materially.** The Mechanism A silent-overwrite path destroyed its own audit trail: the object was overwritten *and* the `Conflict` row that would have recorded it was suppressed by the same switch. Both halves are fixed — the row is always emitted, and the overwrite requires its own opt-in.
+- **#9 (idempotent, reversible, auditable).** **Strengthened, materially.** The Mechanism A silent-overwrite path destroyed its own audit trail: the object was overwritten *and* the `Conflict` row that would have recorded it was suppressed by the same switch. Both halves are fixed — the row is always emitted, and the overwrite requires its own opt-in. The first is enforced **structurally**, not by convention: the authorship predicate takes no override input, so it cannot suppress its own finding (Decision 3).
 - **#10 (OWASP-aware).** Upheld. No parsing, no injection surface; the change is parameter binding and report content.
 
 ## Alternatives considered
@@ -161,6 +178,8 @@ And `-Force` in `Deploy-RoleGroupBackingEntraGroups.ps1` means a **third** thing
 4. **Reuse `-DirectionPolicy repo-wins` as the authorship override instead of a new switch.** Rejected. They arbitrate different questions. `repo-wins` answers "*which* source of truth wins on a shared-property drift" — a policy about content. The authorship override answers "*may I* write over an object a different principal last touched" — a policy about ownership. A foreign-authored object with tracked-field drift is drift the portal made, so `portal-wins` correctly skips it and `repo-wins` correctly proposes to take it; neither says anything about whether the deploy principal is entitled to overwrite another author's work. Folding one into the other would recreate, on `-DirectionPolicy`, the precise overload this ADR is removing from `-Force`.
 
 5. **Suppress the `Conflict` row when `-OverwriteForeignAuthor` is supplied (i.e. keep Mechanism A's shape and merely rename its parameter).** Rejected. It is the cheaper diff and it is wrong. The row is the only record that a foreign-authored object was overwritten; deleting the record as a side effect of authorising the act leaves an operator unable to answer "what did that run clobber?" from the drift report. The switch grants permission, not silence.
+
+   **This is not a hypothetical alternative — it was implemented, and caught in review.** The first cut of this ADR's implementation renamed `Test-ConflictRow`'s `-ForceEnabled` parameter to `-OverwriteForeignAuthor` and left the `if (...) { return $false }` short-circuit standing. Every stated claim above was then **false in the code while true in the document**: under `-OverwriteForeignAuthor` all four Mechanism A reconcilers overwrote the object *and* dropped the `Conflict` row. The tests did not catch it because they only ever exercised the *absent-switch* path — Mechanism B had a "still emits the row when the overwrite IS authorised" assertion and Mechanism A had **no counterpart**, so the missing assertion was the missing capability. The defect is recorded here rather than quietly fixed, because it is the same failure mode as the one this ADR exists to correct — an artefact asserting a capability the code does not implement — and because the *shape* of the near-miss is the lesson: **renaming an input to a function whose logic is wrong relabels the defect, it does not remove it.** The structural fix is purity (Decision 3), and the structural test is asserting the *authorised* path, not just the refused one.
 
 6. **Give `-OverwriteForeignAuthor` to all 21 reconcilers for uniformity.** Rejected. On the IPPS / Security & Compliance surface there is genuinely no authorship field to diff — the three comments ADR 0052 misread are *correct about their own scripts*. A switch that is inert on 15 of 21 scripts is a switch that teaches operators it does nothing, and it would re-import the same false-uniformity assumption, only inverted. The switch exists on exactly the scripts that can honour it.
 

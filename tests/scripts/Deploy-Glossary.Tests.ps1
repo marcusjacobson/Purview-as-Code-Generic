@@ -345,20 +345,27 @@ Describe 'ADR 0029 direction-policy pass (Glossary terms)' {
     }
 }
 
-
 # ---------------------------------------------------------------------------
 # ADR 0053 -- the foreign-author override is split out of -Force into its own
 # switch, -OverwriteForeignAuthor.
 #
-# This is a Mechanism A script: before ADR 0053, Test-ConflictRow opened with
-# `if ($ForceEnabled) { return $false }` and was called with
-# `-ForceEnabled $Force.IsPresent`, so a -Force run SUPPRESSED the Conflict
-# classification entirely and silently overwrote the portal-authored object as
-# a plain Update. These tests pin the corrected contract:
+# Mechanism A script. Two things had to change, and the second is the one the
+# first attempt got wrong:
 #
-#   * -Force alone            => Conflict row IS emitted, object NOT overwritten.
-#   * -OverwriteForeignAuthor => overwrite permitted, Conflict row still emitted.
-#   * the switch lives in the Apply parameter set only.
+#   1. Test-ConflictRow must no longer consult -Force. (Done.)
+#   2. Test-ConflictRow must no longer consult ANY override switch. It is a PURE
+#      authorship predicate. Merely renaming its -ForceEnabled parameter to
+#      -OverwriteForeignAuthor would have preserved the suppress-at-source
+#      short-circuit -- the object gets overwritten AND the Conflict row vanishes
+#      -- which is precisely the alternative ADR 0053 §Alternatives-5 rejects by
+#      name ("the switch grants permission, not silence").
+#
+# The override decision therefore lives in the pure Resolve-ConflictPlanAction,
+# mirroring Mechanism B's Get-ReconciliationPlan. The contract pinned below:
+#
+#   neither switch            -> Conflict row emitted, NOT overwritten
+#   -Force alone              -> Conflict row emitted, NOT overwritten
+#   -OverwriteForeignAuthor   -> Conflict row STILL emitted, overwritten
 #
 # Reference: docs/adr/0053-overwrite-foreign-author-switch.md
 # ---------------------------------------------------------------------------
@@ -379,7 +386,7 @@ Describe 'ADR 0053 -- -OverwriteForeignAuthor (Deploy-Glossary.ps1)' {
             throw ($adr0053Errors | ForEach-Object Message | Out-String)
         }
 
-        foreach ($fnName in @('Get-LastModifiedByIdentity', 'Test-ConflictRow')) {
+        foreach ($fnName in @('Get-LastModifiedByIdentity', 'Test-ConflictRow', 'Resolve-ConflictPlanAction')) {
             $fnAst = $script:Adr0053Ast.Find({
                     param($node)
                     $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and
@@ -424,50 +431,106 @@ Describe 'ADR 0053 -- -OverwriteForeignAuthor (Deploy-Glossary.ps1)' {
         }
     }
 
-    Context 'Test-ConflictRow consults -OverwriteForeignAuthor, never -Force' {
+    Context 'Test-ConflictRow is a PURE authorship predicate' {
 
         It 'no longer exposes a -ForceEnabled parameter' {
             (Get-Command Test-ConflictRow).Parameters.Keys | Should -Not -Contain 'ForceEnabled'
         }
 
-        It 'exposes -OverwriteForeignAuthor instead' {
-            (Get-Command Test-ConflictRow).Parameters.Keys | Should -Contain 'OverwriteForeignAuthor'
+        It 'does NOT expose an -OverwriteForeignAuthor parameter either -- it knows about NO override switch' {
+            # This is the assertion the first attempt at ADR 0053 lacked. Renaming
+            # -ForceEnabled to -OverwriteForeignAuthor keeps the suppress-at-source
+            # short-circuit and ships the alternative the ADR rejects by name.
+            (Get-Command Test-ConflictRow).Parameters.Keys | Should -Not -Contain 'OverwriteForeignAuthor'
         }
 
-        It 'EMITS the Conflict row for a foreign-authored object when the override is absent (-Force alone)' {
-            # The load-bearing assertion. -Force alone leaves
-            # $OverwriteForeignAuthor.IsPresent = $false, so the classifier must
-            # still return $true and the plan builder must emit a Conflict row
-            # rather than an Update. Pre-ADR-0053 this returned $false under
-            # -Force and the object was silently overwritten.
+        It 'takes exactly TenantRaw and DeployIdentity (no override input at all)' {
+            $declared = @((Get-Command Test-ConflictRow).Parameters.Keys |
+                Where-Object { $_ -notin [System.Management.Automation.PSCmdlet]::CommonParameters })
+            $declared | Should -Contain 'TenantRaw'
+            $declared | Should -Contain 'DeployIdentity'
+            $declared.Count | Should -Be 2
+        }
+
+        It 'returns TRUE for a foreign-authored object' {
             Test-ConflictRow `
                 -TenantRaw $script:Adr0053ForeignRaw `
-                -DeployIdentity $script:Adr0053DeployIdentity `
-                -OverwriteForeignAuthor $false | Should -BeTrue
+                -DeployIdentity $script:Adr0053DeployIdentity | Should -BeTrue
         }
 
-        It 'permits the overwrite only when -OverwriteForeignAuthor is supplied' {
-            Test-ConflictRow `
-                -TenantRaw $script:Adr0053ForeignRaw `
-                -DeployIdentity $script:Adr0053DeployIdentity `
-                -OverwriteForeignAuthor $true | Should -BeFalse
-        }
-
-        It 'does not flag an object the deploy principal itself last authored' {
+        It 'returns FALSE for an object the deploy principal itself last authored' {
             $ownRaw = [pscustomobject]@{
                 name      = 'adr0053-fixture'
                 updatedBy = $script:Adr0053DeployIdentity
             }
             Test-ConflictRow `
                 -TenantRaw $ownRaw `
-                -DeployIdentity $script:Adr0053DeployIdentity `
-                -OverwriteForeignAuthor $false | Should -BeFalse
+                -DeployIdentity $script:Adr0053DeployIdentity | Should -BeFalse
+        }
+    }
+
+    Context 'Resolve-ConflictPlanAction -- the override grants permission, NOT silence' {
+
+        It 'under -Force alone: EMITS the Conflict row and does NOT overwrite' {
+            # -Force alone leaves $OverwriteForeignAuthor.IsPresent = $false.
+            # The row must be a Conflict, and the plan action must NOT be Update.
+            $d = Resolve-ConflictPlanAction `
+                -IsConflict $true `
+                -OverwriteForeignAuthor $false `
+                -DriftText 'description' `
+                -Who 'portal-admin@contoso.onmicrosoft.com'
+
+            $d.Category | Should -Be 'Conflict'
+            $d.Conflict | Should -BeTrue
+            $d.Action   | Should -Be 'Conflict'
+            $d.Action   | Should -Not -Be 'Update'
+            $d.Reason   | Should -Match 'Re-run with -OverwriteForeignAuthor to overwrite'
+        }
+
+        It 'under -OverwriteForeignAuthor: STILL emits the Conflict row, AND overwrites' {
+            # The assertion the first attempt was missing entirely. Mechanism B had
+            # it; Mechanism A did not, and shipped the rejected alternative.
+            $d = Resolve-ConflictPlanAction `
+                -IsConflict $true `
+                -OverwriteForeignAuthor $true `
+                -DriftText 'description' `
+                -Who 'portal-admin@contoso.onmicrosoft.com'
+
+            $d.Category | Should -Be 'Conflict'   # <-- the row does NOT vanish
+            $d.Conflict | Should -BeTrue
+            $d.Action   | Should -Be 'Update'     # <-- and the write DOES proceed
+            $d.Reason   | Should -Match 'overwritten because -OverwriteForeignAuthor was supplied'
+        }
+
+        It 'never launders a foreign-author overwrite into a plain Update category' {
+            foreach ($ofa in @($true, $false)) {
+                $d = Resolve-ConflictPlanAction `
+                    -IsConflict $true `
+                    -OverwriteForeignAuthor $ofa `
+                    -DriftText 'description' `
+                    -Who 'portal-admin@contoso.onmicrosoft.com'
+                $d.Category | Should -Be 'Conflict'
+                $d.Conflict | Should -BeTrue
+            }
+        }
+
+        It 'leaves a non-conflicted drifted object as a plain Update, regardless of the switch' {
+            foreach ($ofa in @($true, $false)) {
+                $d = Resolve-ConflictPlanAction `
+                    -IsConflict $false `
+                    -OverwriteForeignAuthor $ofa `
+                    -DriftText 'description' `
+                    -Who ''
+                $d.Category | Should -Be 'Update'
+                $d.Action   | Should -Be 'Update'
+                $d.Conflict | Should -BeFalse
+            }
         }
     }
 
     Context 'Call-site binding' {
 
-        It 'binds every Test-ConflictRow call from $OverwriteForeignAuthor and never from $Force' {
+        It 'calls Test-ConflictRow with NO override argument (purity is enforced at the call site too)' {
             $calls = @($script:Adr0053Ast.FindAll({
                         param($node)
                         $node -is [System.Management.Automation.Language.CommandAst] -and
@@ -477,10 +540,33 @@ Describe 'ADR 0053 -- -OverwriteForeignAuthor (Deploy-Glossary.ps1)' {
             $calls.Count | Should -BeGreaterThan 0
             foreach ($call in $calls) {
                 $callText = $call.Extent.Text
-                $callText | Should -Match '-OverwriteForeignAuthor\s+\$OverwriteForeignAuthor\.IsPresent'
                 $callText | Should -Not -Match '\$Force'
                 $callText | Should -Not -Match '-ForceEnabled'
+                $callText | Should -Not -Match '-OverwriteForeignAuthor'
             }
+        }
+
+        It 'routes the override through Resolve-ConflictPlanAction, bound from $OverwriteForeignAuthor and never from $Force' {
+            $calls = @($script:Adr0053Ast.FindAll({
+                        param($node)
+                        $node -is [System.Management.Automation.Language.CommandAst] -and
+                        $node.GetCommandName() -eq 'Resolve-ConflictPlanAction'
+                    }, $true))
+
+            $calls.Count | Should -BeGreaterThan 0
+            foreach ($call in $calls) {
+                $callText = $call.Extent.Text
+                $callText | Should -Match '-OverwriteForeignAuthor \$OverwriteForeignAuthor\.IsPresent'
+                $callText | Should -Not -Match '\$Force\.IsPresent'
+            }
+        }
+
+        It 'derives the report category for an Update from the row Conflict flag' {
+            # Guards the apply-loop half: a Conflict-flagged Update must report as
+            # 'Conflict', not 'Update'. Without this the plan is right and the
+            # drift report still lies.
+            $script:Adr0053Source | Should -Match "\`$updateCategory = if \(\`$row\.PSObject\.Properties\['Conflict'\] -and \`$row\.Conflict\) \{ 'Conflict' \} else \{ 'Update' \}"
+            $script:Adr0053Source | Should -Match 'Category = \$updateCategory|Category \$updateCategory'
         }
 
         It 'names -OverwriteForeignAuthor (not -Force) in the Conflict row Reason text' {
@@ -488,7 +574,9 @@ Describe 'ADR 0053 -- -OverwriteForeignAuthor (Deploy-Glossary.ps1)' {
         }
 
         It 'carries no ambient $ConfirmPreference self-disarm (ADR 0053 section 4)' {
-            # AST, not raw text -- see the note in the Mechanism B test files.
+            # AST, not raw text -- a raw-text regex would match a COMMENT quoting
+            # the forbidden assignment, which is the read-a-comment-as-code error
+            # ADR 0053 exists to record.
             $assignments = @($script:Adr0053Ast.FindAll({
                         param($node)
                         $node -is [System.Management.Automation.Language.AssignmentStatementAst] -and

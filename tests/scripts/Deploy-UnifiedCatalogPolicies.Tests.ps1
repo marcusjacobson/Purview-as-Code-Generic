@@ -477,7 +477,19 @@ Describe 'ADR 0053 -- -OverwriteForeignAuthor (Deploy-UnifiedCatalogPolicies.ps1
         }
 
         It 'is still declared at ConfirmImpact = High (ADR 0053 does not lower it)' {
-            $script:Adr0053Source | Should -Match "ConfirmImpact\s*=\s*'High'"
+            # AST, not a raw-source regex. This was the one assertion in the suite
+            # that reverted to the technique the rest of it condemns -- a comment
+            # mentioning ConfirmImpact = 'High' would have satisfied it.
+            $attr = $script:Adr0053Ast.Find({
+                    param($node)
+                    $node -is [System.Management.Automation.Language.AttributeAst] -and
+                    $node.TypeName.Name -eq 'CmdletBinding'
+                }, $true)
+            $attr | Should -Not -BeNullOrEmpty
+
+            $impact = @($attr.NamedArguments | Where-Object { $_.ArgumentName -eq 'ConfirmImpact' })
+            $impact.Count | Should -Be 1
+            $impact[0].Argument.Value | Should -Be 'High'
         }
     }
 
