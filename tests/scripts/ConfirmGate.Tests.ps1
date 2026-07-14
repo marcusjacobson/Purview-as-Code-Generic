@@ -275,11 +275,16 @@ Describe 'ConfirmGate: contract check on -Cmdlet' {
 
 Describe 'ADR 0052 reference implementations: source-text contract' {
 
-    BeforeDiscovery {
-        $script:Reconcilers = @('Deploy-Labels.ps1', 'Deploy-FilePlan.ps1', 'Deploy-DLPPolicies.ps1')
-    }
-
-    Context 'on <_>' -ForEach @('Deploy-Labels.ps1', 'Deploy-FilePlan.ps1', 'Deploy-DLPPolicies.ps1') {
+    # Deploy-UnifiedCatalogPolicies.ps1 joins the reference set in PR-A of #83:
+    # it is the ONE script where a policy-keyed gate was reachably vacuous (its
+    # hardcoded -HasDrift $false meant portal-wins never skipped), so it is the
+    # script that motivates the plan-keying rule and the one that must prove it.
+    Context 'on <_>' -ForEach @(
+        'Deploy-Labels.ps1',
+        'Deploy-FilePlan.ps1',
+        'Deploy-DLPPolicies.ps1',
+        'Deploy-UnifiedCatalogPolicies.ps1'
+    ) {
 
         BeforeAll {
             $script:Text = Get-Content -LiteralPath (Join-Path $script:RepoRoot 'scripts' $_) -Raw
@@ -299,20 +304,55 @@ Describe 'ADR 0052 reference implementations: source-text contract' {
             $script:Text | Should -Match 'ConfirmGate\.psm1'
         }
 
-        It 'gates the -PruneMissing delete branch via Assert-DestructiveOperationConfirmed' {
-            $script:Text | Should -Match 'PruneMissing will DELETE'
+        # -CMatch, not -Match, and anchored to the QUERY ASSIGNMENT -- both
+        # deliberately.
+        #
+        # `Should -Match` is case-INSENSITIVE. The first cut of this assertion
+        # was `Should -Match 'This run will OVERWRITE'`, and it passed against
+        # pre-fix Deploy-Labels.ps1 -- which has NO plan-keyed gate at all --
+        # because line 1804 of that file is the lowercase COMMENT
+        # "# this run will overwrite, with the drifted field set, per".
+        # The assertion was green by matching prose, while the gate it claimed
+        # to check did not exist.
+        #
+        # That is precisely the vacuous-guard failure mode this whole change
+        # exists to remove, reproduced inside its own test suite. Recorded here
+        # rather than quietly fixed, because the lesson generalises: AN
+        # ASSERTION THAT CAN BE SATISFIED BY A COMMENT IS NOT AN ASSERTION ABOUT
+        # THE CODE. Anchoring on `$overwriteQuery = "` and matching case-
+        # sensitively makes prose structurally incapable of satisfying it.
+        It 'gates the -PruneMissing destructive branch via Assert-DestructiveOperationConfirmed' {
+            $script:Text | Should -CMatch '\$pruneQuery\s*=\s*"-PruneMissing will (DELETE|REVOKE)'
         }
 
-        It 'gates the -DirectionPolicy repo-wins overwrite branch via Assert-DestructiveOperationConfirmed' {
-            $script:Text | Should -Match 'repo-wins will OVERWRITE'
+        It 'gates the overwrite branch via Assert-DestructiveOperationConfirmed' {
+            $script:Text | Should -CMatch '\$overwriteQuery\s*=\s*"This run will OVERWRITE'
         }
 
         It 'aborts the run when the operator declines (does not partially apply)' {
-            $script:Text | Should -Match 'Aborted by operator at the .* confirmation gate \(ADR 0052\)'
+            $script:Text | Should -CMatch "throw 'Aborted by operator at the .* confirmation gate \(ADR 0052\)"
         }
 
         It 'uses ShouldContinue for the destructive gate, not ShouldProcess' {
             $script:Text | Should -Match 'Assert-DestructiveOperationConfirmed'
+        }
+
+        # ---- The plan-keying invariant, asserted on source text ----
+        # RED against the pre-#83 reference keying, which every one of these
+        # four scripts carried:
+        #     if ($DirectionPolicy -eq 'repo-wins' -and $overwrites.Count -gt 0)
+        # The policy conjunct makes the gate's firing depend on $DirectionPolicy
+        # -- a PROXY for "will this overwrite?" -- rather than on the plan, which
+        # is ground truth. Where the proxy is wrong (Deploy-UnifiedCatalogPolicies
+        # pre-F4) the gate sits silent while the overwrite proceeds.
+        It 'does NOT key any gate on $DirectionPolicy (plan-keying, not policy-keying)' {
+            # Strip comments first: ConfirmGate.psm1's rule and these scripts'
+            # explanatory comments legitimately quote the anti-pattern.
+            $code = ($script:Text -split "\r?\n" |
+                Where-Object { $_ -notmatch '^\s*#' }) -join "`n"
+
+            $code | Should -Not -Match "if\s*\(\s*\`$DirectionPolicy\s*-eq\s*'repo-wins'\s*-and" `
+                -Because 'the gate must be keyed on the plan ($overwrites.Count -gt 0), never on $DirectionPolicy -- a policy-keyed gate passes vacuously wherever portal-wins fails to skip'
         }
     }
 }
@@ -366,6 +406,129 @@ Describe 'ADR 0052: CI cannot hang -- every workflow invocation binds -Confirm:$
             foreach ($s in $splats) {
                 $s.Groups['body'].Value | Should -Match 'Confirm\s*=\s*\$false'
             }
+        }
+    }
+}
+
+Describe 'ADR 0052 gate keying: key on the PLAN, never on the POLICY (#83)' {
+
+    # THE DISCRIMINATING TEST for the #83 design correction.
+    #
+    # The ADR 0052 reference implementations originally keyed the overwrite gate
+    # on a CONJUNCTION:
+    #
+    #     if ($DirectionPolicy -eq 'repo-wins' -and $overwrites.Count -gt 0)
+    #
+    # That policy conjunct is either redundant or dangerous, and never useful:
+    #
+    #   * REDUNDANT wherever portal-wins genuinely skips drifted objects -- the
+    #     overwrite list can then only populate under repo-wins anyway.
+    #   * DANGEROUS wherever it does not. Deploy-UnifiedCatalogPolicies.ps1
+    #     passed a hardcoded `-HasDrift $false` into Resolve-DirectionPolicyAction,
+    #     which only skips when `$HasDrift -and $Policy -eq 'portal-wins'`. So
+    #     portal-wins never skipped: the overwrite list populated, the policy
+    #     conjunct evaluated FALSE, THE GATE NEVER FIRED, and a PERMISSIONS
+    #     surface was overwritten with no confirmation.
+    #
+    # The discriminating input is therefore: portal-wins AND a non-empty
+    # overwrite plan. Policy-keying does not fire on it. Plan-keying does.
+    #
+    # NOTE ON NON-VACUITY, stated honestly. That input state was REACHABLE on
+    # pre-fix 1d4f855 through Deploy-UnifiedCatalogPolicies' real plan pipeline
+    # -- that is the historical RED replay in the PR body. The F4 fix in this
+    # same change closes that reachability, and an audit of all 12 Class A
+    # call sites found UCP was the only script whose HasDrift was wrong. So
+    # after this PR, no CURRENT pipeline can reach the divergent state, and this
+    # test is a LATENT guard, not an active one: it fires the moment anyone
+    # reintroduces policy-keying, or lands a HasDrift bug like F4 again. That is
+    # worth having -- it is the same reason ADR 0052 chose ShouldContinue over
+    # ShouldProcess, and ADR 0053 made Test-ConflictRow pure: THE GUARD MUST NOT
+    # DEPEND ON A NEGOTIABLE PROXY. It is not sold as catching a live bug.
+
+    BeforeAll {
+        # The two candidate keying rules, isolated. Everything else is held equal.
+        function Test-GateFires_PolicyKeyed {
+            param([string]$DirectionPolicy, [string[]]$Overwrites)
+            return (($DirectionPolicy -eq 'repo-wins') -and ($Overwrites.Count -gt 0))
+        }
+        # $DirectionPolicy is deliberately UNUSED here, and PSSA is right that it
+        # is: THAT IS THE ENTIRE INVARIANT. Plan-keying does not consult the
+        # policy. The parameter is kept so both keyings share one signature and
+        # Measure-GatePrompt can call them interchangeably -- if it were removed,
+        # the two rules could not be compared against identical inputs.
+        function Test-GateFires_PlanKeyed {
+            [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSReviewUnusedParameter', 'DirectionPolicy',
+                Justification = 'Deliberately unconsulted: plan-keying ignores the direction policy. That is the invariant under test.')]
+            param([string]$DirectionPolicy, [string[]]$Overwrites)
+            return ($Overwrites.Count -gt 0)
+        }
+
+        # Drive the REAL gate and count the prompts it actually raises.
+        function Measure-GatePrompt {
+            param([scriptblock]$Keying, [string]$DirectionPolicy, [string[]]$Overwrites)
+            $stub = Get-StubCmdlet -Answer $true
+            $yes = $false
+            $no = $false
+            if (& $Keying -DirectionPolicy $DirectionPolicy -Overwrites $Overwrites) {
+                Assert-DestructiveOperationConfirmed `
+                    -Cmdlet $stub `
+                    -Caption 'Destructive operation (ADR 0052)' `
+                    -Query ("This run will OVERWRITE {0} object(s): {1}. Continue?" -f $Overwrites.Count, ($Overwrites -join ', ')) `
+                    -YesToAll ([ref]$yes) -NoToAll ([ref]$no) | Out-Null
+            }
+            return $stub.Calls.Count
+        }
+    }
+
+    Context 'the discriminating case: portal-wins with a NON-EMPTY overwrite plan' {
+
+        # If this ever passes under BOTH keyings, the correction is theatre and
+        # the rollout is unsafe. It must be RED against policy-keying.
+        It 'PLAN-keyed  -> the gate FIRES (the objects are being overwritten, so ask)' {
+            $prompts = Measure-GatePrompt `
+                -Keying ${function:Test-GateFires_PlanKeyed} `
+                -DirectionPolicy 'portal-wins' `
+                -Overwrites @('Finance / Governance Domain Owner', 'HR / Governance Domain Reader')
+
+            $prompts | Should -Be 1 -Because 'the plan says two objects WILL be overwritten; the policy that let them through is irrelevant'
+        }
+
+        It 'POLICY-keyed -> the gate stays SILENT (this is the defect; pinned so it stays dead)' {
+            $prompts = Measure-GatePrompt `
+                -Keying ${function:Test-GateFires_PolicyKeyed} `
+                -DirectionPolicy 'portal-wins' `
+                -Overwrites @('Finance / Governance Domain Owner', 'HR / Governance Domain Reader')
+
+            $prompts | Should -Be 0 -Because 'this is exactly the vacuous pass the plan-keying rule exists to prevent -- a guard that can pass vacuously is worse than no guard, because it is believed'
+        }
+    }
+
+    Context 'the two keyings agree everywhere else (so the difference is the defect, not a behaviour change)' {
+
+        It 'repo-wins + non-empty plan -> BOTH fire' {
+            $ow = @('Finance / Governance Domain Owner')
+            (Measure-GatePrompt -Keying ${function:Test-GateFires_PlanKeyed} -DirectionPolicy 'repo-wins' -Overwrites $ow) | Should -Be 1
+            (Measure-GatePrompt -Keying ${function:Test-GateFires_PolicyKeyed} -DirectionPolicy 'repo-wins' -Overwrites $ow) | Should -Be 1
+        }
+
+        It 'empty overwrite plan -> NEITHER fires, under either policy' -ForEach @('portal-wins', 'repo-wins') {
+            (Measure-GatePrompt -Keying ${function:Test-GateFires_PlanKeyed} -DirectionPolicy $_ -Overwrites @()) | Should -Be 0
+            (Measure-GatePrompt -Keying ${function:Test-GateFires_PolicyKeyed} -DirectionPolicy $_ -Overwrites @()) | Should -Be 0
+        }
+    }
+
+    Context 'the invariant, stated positively' {
+
+        # Plan-keying's defining property: the gate fires IFF the plan is
+        # non-empty. The policy is not an input. Table-driven so a future
+        # reader can see there is no policy value that suppresses the prompt.
+        It 'fires on a non-empty overwrite plan under <_> -- the policy is NOT an input to the decision' -ForEach @('portal-wins', 'repo-wins') {
+            $prompts = Measure-GatePrompt `
+                -Keying ${function:Test-GateFires_PlanKeyed} `
+                -DirectionPolicy $_ `
+                -Overwrites @('Some / Object')
+
+            $prompts | Should -Be 1
         }
     }
 }
