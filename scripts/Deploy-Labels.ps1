@@ -157,11 +157,18 @@
       * `repo-wins`   -- apply the full plan including shared-
                          property drift. Emit one Write-Warning per
                          overwritten shared label naming the
-                         drifted field(s). The typed-confirmation
-                         gate ('overwrite portal') is a CI-layer
-                         concern enforced by the workflow per
-                         ADR 0029; local script callers are
-                         operator-trusted.
+                         drifted field(s). The overwrite is gated at
+                         the SCRIPT layer by the ADR 0052 typed-
+                         confirmation prompt: it names the labels it
+                         is about to overwrite, asks EVERY caller --
+                         local operators included -- and aborts with
+                         no tenant writes if declined. Suppress with
+                         -Force, or -Confirm:$false as CI does. The
+                         workflow's 'overwrite portal' input is an
+                         ADDITIONAL gate per ADR 0029, not the only
+                         one: a clone of this template that has not
+                         run kickoff has no CI at all, so the
+                         script-layer gate is its only defence.
     Default `portal-wins`. Reference:
     `docs/adr/0029-source-of-truth-direction-policy.md`.
 

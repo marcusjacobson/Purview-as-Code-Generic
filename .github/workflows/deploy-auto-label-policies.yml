@@ -387,7 +387,19 @@ jobs:
           # ADR 0016 section 9: mode: Enable -> Status: On; Test* /
           # Disable -> presence-only. Throws on any Fail/Missing row.
           # Reference: https://learn.microsoft.com/en-us/powershell/module/exchangepowershell/get-autosensitivitylabelpolicy
-          ./scripts/Deploy-AutoLabelPolicies.ps1 -VerifyPublished -InformationAction Continue
+          #
+          # -Confirm:$false is DEFENCE IN DEPTH here, not a live fix. The
+          # -VerifyPublished path provably cannot reach a prompt today: the
+          # `if ($mode -eq 'Verify')` block ends in an unconditional `return`,
+          # and every one of the script's 10 $PSCmdlet.ShouldProcess(...) sites
+          # and both of its ADR 0052 gate sites lie strictly AFTER it, in the
+          # Apply region. But `-VerifyPublished` is one refactor away from
+          # sharing that region, and at ConfirmImpact = 'High' the first
+          # ShouldProcess it reached would prompt on a hosted runner with no
+          # one to answer. The binding costs nothing and removes the
+          # dependence on that proof staying true.
+          # Reference: docs/adr/0052-destructive-confirmation-gate-at-script-layer.md
+          ./scripts/Deploy-AutoLabelPolicies.ps1 -VerifyPublished -Confirm:$false -InformationAction Continue
 
       # Re-export tenant state and stage it as an artifact for the
       # drift-back-pr job. Runs only when portal-wins skipped at

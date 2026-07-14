@@ -32,9 +32,13 @@
          Connect-IPPSSession against the live tenant.
       2. Source-text regex assertions on the three reference consumers
          (ConfirmImpact level, module import, gate invocation).
-      3. Workflow-text assertions that every CI invocation of the two
-         reconcilers with a ShouldProcess-gated write binds -Confirm:$false,
-         so raising ConfirmImpact to 'High' cannot hang a job.
+      3. A DERIVED workflow scan: the gated set comes from the AST, every
+         run: block in every .github/workflows/*.yml is parsed as PowerShell,
+         and every invocation of every gated script -- including the
+         drift-detection glob loop, which dispatches all twenty via
+         `& $script.FullName` -- must bind -Confirm:$false or -WhatIf, so
+         raising ConfirmImpact to 'High' cannot hang a job. -Force is NOT
+         accepted: it silences the gate but not ShouldProcess.
 
     Reference: https://pester.dev/docs/quick-start
     Reference: docs/adr/0052-destructive-confirmation-gate-at-script-layer.md
@@ -1068,6 +1072,284 @@ BeforeAll {
     # never examined at all. An accumulator that is compared against the canonical
     # gated set is the only thing that can prove that is no longer true.
     $script:ContractExamined = [System.Collections.Generic.List[string]]::new()
+
+    # =====================================================================
+    #  THE CI-HANG SCANNER (batch 3). Derived, not curated.
+    # =====================================================================
+    #
+    # THE DEFECT THIS REPLACES. The CI-hang Describe below used to drive its
+    # -ForEach from a HARDCODED list of FOUR workflows, checking invocations of
+    # TWO scripts (Deploy-Labels, Deploy-DLPPolicies). Twenty scripts are now
+    # gated. Every CI invocation of the other EIGHTEEN was unexamined. That is the
+    # same green-by-absence hole batch 1.5 closed for the gate contract, left wide
+    # open for the hang contract -- and it is worse here, because the failure mode
+    # is not "a gate is missing" but "the runner blocks forever on a prompt nobody
+    # can answer".
+    #
+    # WHY IT MATTERS AT ALL. The gate uses $PSCmdlet.ShouldContinue(), which
+    # performs no ConfirmImpact / $ConfirmPreference comparison and therefore
+    # prompts UNCONDITIONALLY. Separately, raising ConfirmImpact to 'High' means
+    # every $PSCmdlet.ShouldProcess(...) in these scripts now prompts too, because
+    # $ConfirmPreference defaults to 'High'. So ANY CI invocation that reaches
+    # either one, without a suppressor, is a hung job.
+    #
+    # ---- THE SUPPRESSOR SET, AND WHY -Force IS NOT IN IT ----
+    #
+    # This is the one place this guard deliberately contradicts the rollout brief,
+    # which listed the suppressors as `-Confirm:$false`, `-Force`, or `-WhatIf`.
+    # -Force IS NOT A SUPPRESSOR of the CI hang, and the difference is load-bearing:
+    #
+    #   * -Confirm:$false  -- sets $ConfirmPreference = 'None' for the invocation.
+    #                         Suppresses ShouldProcess AND the gate. SAFE.
+    #   * -WhatIf          -- ShouldProcess returns $false with a "What if:" line and
+    #                         no prompt; ConfirmGate short-circuits on -IsWhatIf
+    #                         BEFORE ShouldContinue. SAFE. (This is what makes the
+    #                         drift-detection glob loop safe -- see below.)
+    #   * -Force           -- a CUSTOM switch on these scripts. It suppresses the
+    #                         GATE (ConfirmGate honours -Force) and does NOTHING to
+    #                         $PSCmdlet.ShouldProcess, which consults only
+    #                         $ConfirmPreference. ADR 0053 section 4 deliberately
+    #                         REMOVED the `if ($Force) { $ConfirmPreference = 'None' }`
+    #                         ambient self-disarm that used to paper over this.
+    #
+    # Verified by experiment, not reasoned from the docs. A probe script at
+    # ConfirmImpact='High' invoked as `pwsh -c "& ./probe.ps1 -Force"` with stdin
+    # closed does not proceed -- ShouldProcess THROWS ("PowerShell is in
+    # NonInteractive mode. Read and Prompt functionality is not available."). The
+    # same probe with -Confirm:$false or -WhatIf runs clean.
+    #
+    # No CI invocation in this repo currently relies on -Force alone, so excluding
+    # it changes no verdict TODAY. It is excluded so that the first author who
+    # reaches for `-Force` instead of `-Confirm:$false` -- the natural mistake,
+    # since -Force is what silences the gate when you run the script by hand --
+    # gets a RED test instead of a hung weekly job.
+    # Reference: https://learn.microsoft.com/en-us/powershell/scripting/learn/deep-dives/everything-about-shouldprocess
+
+    # Every `run:` block in a workflow, with its file and line. Pure text, walked
+    # by indentation.
+    #
+    # NO powershell-yaml DEPENDENCY, and that is deliberate. validate.yml's `pester`
+    # job runs ./tests/Run-Pester.ps1 on a bare windows-latest runner and installs
+    # NOTHING but Pester -- the `Install-Module powershell-yaml` step exists only on
+    # OTHER jobs. A guard that needed ConvertFrom-Yaml would throw in the one job
+    # that actually runs it.
+    function Get-WorkflowRunBlock {
+        param([Parameter(Mandatory)][string]$Path)
+        $lines = Get-Content -LiteralPath $Path
+        $blocks = [System.Collections.Generic.List[object]]::new()
+        for ($i = 0; $i -lt $lines.Count; $i++) {
+            if ($lines[$i] -notmatch '^(\s*)run:(.*)$') { continue }
+            $indent = $Matches[1].Length
+            $rest = $Matches[2].Trim()
+            $startLine = $i + 1
+            if ($rest -match '^[|>][-+]?\d*$') {
+                # Block scalar: every following line indented deeper than `run:`.
+                $body = [System.Collections.Generic.List[string]]::new()
+                $j = $i + 1
+                while ($j -lt $lines.Count) {
+                    $l = $lines[$j]
+                    if ($l.Trim().Length -eq 0) { $body.Add(''); $j++; continue }
+                    if ((($l -replace '^(\s*).*$', '$1').Length) -le $indent) { break }
+                    $body.Add($l); $j++
+                }
+                $nonBlank = @($body | Where-Object { $_.Trim().Length -gt 0 })
+                $min = if ($nonBlank.Count) {
+                    ($nonBlank | ForEach-Object { ($_ -replace '^(\s*).*$', '$1').Length } | Measure-Object -Minimum).Minimum
+                }
+                else { 0 }
+                $text = ($body | ForEach-Object { if ($_.Length -ge $min) { $_.Substring($min) } else { '' } }) -join "`n"
+                $blocks.Add([pscustomobject]@{ File = (Split-Path $Path -Leaf); Line = $startLine; Text = $text })
+                $i = $j - 1
+            }
+            elseif ($rest.Length -gt 0) {
+                $blocks.Add([pscustomobject]@{ File = (Split-Path $Path -Leaf); Line = $startLine; Text = $rest })
+            }
+        }
+        return $blocks
+    }
+
+    # Which suppressors an invocation binds. AST, never regex: a `run:` block is
+    # PowerShell, and the same "prose cannot forge an AST node" rule that governs
+    # the gate contract governs here. It is what lets validate.yml's
+    #
+    #     $exempt = @('Deploy-Classifications.ps1', 'Deploy-IRMPolicies.ps1', ...)
+    #
+    # be recognised for what it is -- StringConstantExpressionAsts consumed by
+    # Get-Content, NOT invocations -- and correctly left unflagged. A regex for
+    # `Deploy-\w+\.ps1` flags all eight and the guard becomes a nuisance that the
+    # next author silences.
+    function Get-InvocationSuppressor {
+        param([Parameter(Mandatory)]$CommandAst, [Parameter(Mandatory)]$BlockAst)
+        $found = [System.Collections.Generic.List[string]]::new()
+        $elements = @($CommandAst.CommandElements)
+
+        # (a) directly bound: -Confirm:$false / -WhatIf
+        foreach ($el in $elements) {
+            if ($el -isnot [System.Management.Automation.Language.CommandParameterAst]) { continue }
+            $name = $el.ParameterName
+            $arg = $el.Argument
+            # `$false` parses as a VariableExpressionAst whose UserPath is 'false'.
+            $argIsFalse = $arg -is [System.Management.Automation.Language.VariableExpressionAst] -and
+            $arg.VariablePath.UserPath -eq 'false'
+            $argIsTrue = $arg -is [System.Management.Automation.Language.VariableExpressionAst] -and
+            $arg.VariablePath.UserPath -eq 'true'
+            if ($name -eq 'Confirm' -and $argIsFalse) { $found.Add('-Confirm:$false') }
+            if ($name -eq 'WhatIf' -and ($null -eq $arg -or $argIsTrue)) { $found.Add('-WhatIf') }
+        }
+
+        # (b) splatted: `./scripts/Deploy-X.ps1 @applyArgs`, hashtable built above.
+        #
+        # ONLY the hashtable LITERAL counts, never a later `$applyArgs['Confirm'] = $false`
+        # index-assignment. Fail closed: an index-assignment can sit inside an `if`,
+        # and a CONDITIONALLY-bound suppressor is no suppressor at all. The repo's
+        # own splats put Confirm in the literal and use index-assignment only for
+        # SkipNames / PruneMissing, so this costs nothing and refuses the unsound shape.
+        $splat = @($elements | Where-Object {
+                $_ -is [System.Management.Automation.Language.VariableExpressionAst] -and $_.Splatted
+            }) | Select-Object -First 1
+        if ($splat) {
+            $splatName = [string]$splat.VariablePath.UserPath
+            $assign = @($BlockAst.FindAll({
+                        param($n)
+                        $n -is [System.Management.Automation.Language.AssignmentStatementAst] -and
+                        $n.Left -is [System.Management.Automation.Language.VariableExpressionAst] -and
+                        $n.Left.VariablePath.UserPath -eq $splatName
+                    }, $true)) | Select-Object -First 1
+            if ($assign) {
+                $hash = @($assign.Right.FindAll({
+                            param($n) $n -is [System.Management.Automation.Language.HashtableAst]
+                        }, $true)) | Select-Object -First 1
+                if ($hash) {
+                    foreach ($pair in $hash.KeyValuePairs) {
+                        $key = ($pair.Item1.Extent.Text -replace "['`"]", '')
+                        $val = $pair.Item2.Extent.Text.Trim()
+                        if ($key -eq 'Confirm' -and $val -eq '$false') { $found.Add("SPLAT @$splatName Confirm = `$false") }
+                        if ($key -eq 'WhatIf' -and $val -eq '$true') { $found.Add("SPLAT @$splatName WhatIf = `$true") }
+                    }
+                }
+            }
+        }
+        return @($found)
+    }
+
+    # Every invocation of a gated script inside one `run:` block.
+    #
+    # TWO SHAPES, and missing either one is a fail-open hole:
+    #
+    #  1. DIRECT -- the command name is a literal path ending in a gated script's
+    #     file name. Backtick line-continuations need no special handling at all:
+    #     the PowerShell parser joins them, which is exactly why the old regex-based
+    #     version had to hand-roll a continuation walker.
+    #
+    #  2. GLOB DISPATCH -- .github/workflows/drift-detection.yml:113:
+    #
+    #         $reconcilers = Get-ChildItem scripts/Deploy-*.ps1 | Where-Object {
+    #             (Get-Content $_.FullName -Raw) -match 'SupportsShouldProcess' }
+    #         foreach ($script in $reconcilers) { & $script.FullName -WhatIf }
+    #
+    #     This invokes ALL TWENTY gated scripts, weekly, on a hosted runner. The
+    #     command name is `$script.FullName` -- an expression, not a literal -- so a
+    #     scanner looking only for literal script paths finds ZERO invocations here
+    #     and passes green while asserting nothing about the single widest-reaching
+    #     CI invocation in the repo. It is the exact shape most likely to be silently
+    #     skipped, so it gets its own non-vacuity floor in the Describe below.
+    #
+    #     It is SAFE -- it binds -WhatIf -- but it must be PROVEN safe, not assumed.
+    #
+    #     Detection is deliberately fail-CLOSED and coarse: any `&`/`.` dispatch on a
+    #     non-literal command name, in a block that also enumerates Deploy-*.ps1, is
+    #     charged with invoking EVERY gated script. A dispatch this guard cannot
+    #     resolve is treated as reaching all of them rather than none of them.
+    function Get-CiInvocationSite {
+        param(
+            [Parameter(Mandatory)]$Block,
+            [Parameter(Mandatory)][string[]]$GatedScripts,
+            [Parameter(Mandatory)][ref]$ParseFailure
+        )
+        $sites = [System.Collections.Generic.List[object]]::new()
+        $tokens = $null
+        $errors = $null
+        $ast = [System.Management.Automation.Language.Parser]::ParseInput($Block.Text, [ref]$tokens, [ref]$errors)
+        if ($errors.Count -gt 0) {
+            # A candidate block that will not parse must NOT be silently skipped --
+            # that is how a scanner goes green by reading nothing. Recorded, and
+            # asserted on as a hard failure.
+            $ParseFailure.Value.Add([pscustomobject]@{
+                    File = $Block.File; Line = $Block.Line
+                    Why  = $errors[0].Message
+                })
+            return $sites
+        }
+
+        $commands = @($ast.FindAll({
+                    param($n) $n -is [System.Management.Automation.Language.CommandAst]
+                }, $true))
+
+        $enumeratesReconcilers = @($commands | Where-Object {
+                $_.GetCommandName() -eq 'Get-ChildItem' -and
+                @($_.CommandElements | Where-Object { $_.Extent.Text -match 'Deploy-\*\.ps1' }).Count -gt 0
+            }).Count -gt 0
+
+        foreach ($cmd in $commands) {
+            $first = $cmd.CommandElements[0]
+            $nameText = $first.Extent.Text
+            $targets = $null
+            $kind = $null
+
+            $hit = @($GatedScripts | Where-Object { $nameText -match ([regex]::Escape($_) + '$') })
+            if ($hit.Count -gt 0) {
+                $targets = $hit; $kind = 'direct'
+            }
+            elseif ($enumeratesReconcilers -and
+                $cmd.InvocationOperator -in @('Ampersand', 'Dot') -and
+                $first -isnot [System.Management.Automation.Language.StringConstantExpressionAst]) {
+                $targets = $GatedScripts; $kind = 'glob-dispatch'
+            }
+            if (-not $targets) { continue }
+
+            $sites.Add([pscustomobject]@{
+                    File        = $Block.File
+                    Line        = $Block.Line
+                    Kind        = $kind
+                    Targets     = @($targets)
+                    Command     = ($cmd.Extent.Text -replace '\s+', ' ')
+                    Suppressors = @(Get-InvocationSuppressor -CommandAst $cmd -BlockAst $ast)
+                })
+        }
+        return $sites
+    }
+
+    # The whole scan, over every workflow. Returns the counts the Describe asserts
+    # on -- a scanner that finds nothing must be able to SAY it found nothing.
+    function Get-CiHangScan {
+        param([Parameter(Mandatory)][string[]]$GatedScripts)
+        $wfDir = Join-Path $script:RepoRoot '.github' 'workflows'
+        $allBlocks = [System.Collections.Generic.List[object]]::new()
+        foreach ($wf in (Get-ChildItem -Path $wfDir -Filter '*.yml' -File)) {
+            foreach ($b in (Get-WorkflowRunBlock -Path $wf.FullName)) { $allBlocks.Add($b) }
+        }
+
+        # CANDIDATE = any run block whose raw text so much as mentions 'Deploy-'.
+        # A deliberate textual SUPERSET: it can only over-include, never miss an
+        # invocation (every gated script's name, and the Deploy-*.ps1 glob, contain
+        # it). The AST pass below is what does the real discrimination -- this only
+        # keeps us from PowerShell-parsing the repo's bash blocks.
+        $candidates = @($allBlocks | Where-Object { $_.Text -match 'Deploy-' })
+
+        $parseFailures = [System.Collections.Generic.List[object]]::new()
+        $sites = [System.Collections.Generic.List[object]]::new()
+        foreach ($b in $candidates) {
+            foreach ($s in (Get-CiInvocationSite -Block $b -GatedScripts $GatedScripts -ParseFailure ([ref]$parseFailures))) {
+                $sites.Add($s)
+            }
+        }
+        return [pscustomobject]@{
+            TotalBlocks     = $allBlocks.Count
+            CandidateBlocks = $candidates.Count
+            ParseFailures   = @($parseFailures)
+            Sites           = @($sites)
+        }
+    }
 }
 
 Describe 'ConfirmGate: ShouldContinue prompt emission (ADR 0052)' {
@@ -1869,55 +2151,199 @@ Describe 'ADR 0052 reference implementations: AST contract (not source text)' {
     }
 }
 
-Describe 'ADR 0052: CI cannot hang -- every workflow invocation binds -Confirm:$false' {
+Describe 'ADR 0052: CI cannot hang -- every workflow invocation of a GATED script binds a suppressor' {
 
-    # This is the regression test for the hang that raising ConfirmImpact to
-    # 'High' would otherwise have caused. Deploy-Labels.ps1 wraps its
-    # -ExportCurrentState YAML write in $PSCmdlet.ShouldProcess(...), and two
-    # workflows invoked that export path without -Confirm:$false. At 'High'
-    # those steps would have prompted on a hosted runner and hung the job.
-    Context 'in <_>' -ForEach @(
-        'deploy-labels.yml',
-        'sync-labels-from-tenant.yml',
-        'deploy-dlp.yml',
-        'sync-dlp-from-tenant.yml'
-    ) {
+    # See the extended note on the CI-hang scanner in the file-level BeforeAll for
+    # WHY this is derived and why -Force is NOT a suppressor.
+    #
+    # In one line: the previous version of this Describe drove a -ForEach from a
+    # hardcoded list of FOUR workflows and checked invocations of TWO scripts.
+    # Twenty are gated. Eighteen were unexamined. This one derives the gated set
+    # from the AST, scans EVERY run: block in EVERY workflow, and states its
+    # population before asserting anything about it.
+
+    BeforeAll {
+        $script:CiGated = @(Get-GatedReconciler)
+        $script:CiScan = Get-CiHangScan -GatedScripts $script:CiGated
+        $script:CiSites = @($script:CiScan.Sites)
+    }
+
+    # ---------------- NON-VACUITY. Assert the population FIRST. ----------------
+    #
+    # A scanner that matches nothing passes green and asserts nothing. Every count
+    # this guard depends on is named and floored, so the guard cannot quietly
+    # degrade into a no-op the way its predecessor did.
+
+    It 'found the gated scripts to scan for (a scan for nothing proves nothing)' {
+        $script:CiGated.Count | Should -BeGreaterThan 0 -Because 'the gated set is derived from the AST; zero means the derivation broke and every assertion below is vacuous'
+        # The gated set is derived twice in this file (here and in the AST-contract
+        # BeforeDiscovery). The completion Describe pins that they agree.
+        $script:CiGated.Count | Should -Be 20 -Because (
+            'twenty of the twenty-one reconcilers are gated; Deploy-EntraDirectoryRoles.ps1 is the one declared exception (issue #105). ' +
+            "Found: $($script:CiGated.Count) -- [$($script:CiGated -join ', ')]. " +
+            'If #105 has landed, this number becomes 21 and $script:UngatedByDesign must be emptied.'
+        )
+    }
+
+    It 'read the workflows and found run: blocks to examine' {
+        $script:CiScan.TotalBlocks | Should -BeGreaterThan 0 -Because 'the run:-block extractor returned nothing -- it is broken, and a broken extractor makes this whole Describe green by absence'
+        $script:CiScan.CandidateBlocks | Should -BeGreaterThan 0 -Because 'no run: block anywhere in .github/workflows mentions a reconciler. Either the extractor is broken or the workflows stopped calling the scripts.'
+    }
+
+    It 'parsed every candidate run: block (an unparseable block is a hole, not a pass)' {
+        @($script:CiScan.ParseFailures).Count | Should -Be 0 -Because (
+            'a run: block that mentions a reconciler but does not parse as PowerShell is a block this scanner CANNOT see into. ' +
+            'Skipping it would be green-by-absence. Failure(s): ' +
+            (($script:CiScan.ParseFailures | ForEach-Object { "$($_.File):$($_.Line) -- $($_.Why)" }) -join ' | ')
+        )
+    }
+
+    It 'found CI invocation sites to check' {
+        $script:CiSites.Count | Should -BeGreaterThan 0 -Because (
+            'the scanner found ZERO invocations of ZERO gated scripts across every workflow. That is not a pass -- the repo demonstrably ' +
+            'invokes these reconcilers from CI. It means the AST matcher is broken and every suppressor assertion below iterates an empty set.'
+        )
+    }
+
+    # ---- THE GLOB-DISPATCH FLOOR. The shape most likely to be silently skipped. ----
+    #
+    # drift-detection.yml runs EVERY gated reconciler, weekly, on a hosted runner,
+    # via `& $script.FullName -WhatIf` over a Get-ChildItem glob. The command name
+    # is an expression, so a scanner that only matches literal script paths finds
+    # nothing here -- and passes. This floor is what makes "the scanner handles the
+    # glob loop" a tested claim rather than a comment.
+    It 'MATCHES the drift-detection glob-loop shape (& $script.FullName over a Deploy-*.ps1 glob)' {
+        $glob = @($script:CiSites | Where-Object { $_.Kind -eq 'glob-dispatch' })
+
+        $glob.Count | Should -BeGreaterThan 0 -Because (
+            'the scanner recognised NO glob-dispatch invocation. .github/workflows/drift-detection.yml enumerates scripts/Deploy-*.ps1 and ' +
+            'runs each one with `& $script.FullName -WhatIf` -- the single widest-reaching CI invocation in the repo, hitting all twenty gated ' +
+            'scripts weekly. A scanner that cannot see it reports zero findings there and passes green while asserting nothing. If that workflow ' +
+            'was deliberately removed, delete this assertion CONSCIOUSLY -- do not let it rot into a no-op.'
+        )
+
+        foreach ($g in $glob) {
+            # It must be charged with ALL of them, not one of them.
+            @($g.Targets).Count | Should -Be $script:CiGated.Count -Because (
+                "the glob dispatch at $($g.File):$($g.Line) invokes whatever the glob matched, which this guard cannot resolve statically. " +
+                'It must therefore be charged with EVERY gated script (fail closed), not with none of them.'
+            )
+        }
+    }
+
+    # ---------------- THE CONTRACT ITSELF ----------------
+
+    It 'binds -Confirm:$false or -WhatIf on EVERY invocation of EVERY gated script' {
+        $script:CiSites.Count | Should -BeGreaterThan 0 -Because 'an assertion about "every invocation" is vacuous if there are no invocations'
+
+        $naked = @($script:CiSites | Where-Object { @($_.Suppressors).Count -eq 0 })
+
+        $naked.Count | Should -Be 0 -Because (
+            'every gated reconciler prompts UNCONDITIONALLY at its ADR 0052 gate (ShouldContinue ignores $ConfirmPreference) and prompts at ' +
+            "every `$PSCmdlet.ShouldProcess(...) too, now that ConfirmImpact is 'High'. A CI invocation that binds neither -Confirm:`$false nor " +
+            '-WhatIf therefore HANGS the runner the moment it reaches a destructive branch, with nobody able to answer. ' +
+            "NOTE: -Force is NOT accepted here -- it silences the gate but not ShouldProcess (ADR 0053 section 4 removed the ambient self-disarm), " +
+            'so an invocation carrying only -Force still hangs. Unsuppressed invocation(s): ' +
+            (($naked | ForEach-Object { "$($_.File):$($_.Line) [$($_.Kind)] '$($_.Command)'" }) -join ' | ')
+        )
+    }
+
+    # ---- FALSE-POSITIVE FLOOR. A guard that cries wolf gets deleted. ----
+    #
+    # validate.yml:188-197 holds eight gated script names as STRING LITERALS in an
+    # $exempt array, consumed by Get-Content + regex. They are not invocations, and
+    # flagging them would make this guard a nuisance that the next author silences
+    # by weakening it. Probes, not a hardcoded allow-list for validate.yml, so the
+    # claim is about the SCANNER and not about one file.
+    Context 'the scanner distinguishes an invocation from a mention (probes)' {
+
         BeforeAll {
-            $script:WfText = Get-Content -LiteralPath (Join-Path $script:RepoRoot '.github' 'workflows' $_) -Raw
-        }
-
-        It 'binds -Confirm:$false on every Deploy-Labels/Deploy-DLPPolicies invocation' {
-            # An invocation is a pwsh call continued across lines with trailing
-            # backticks, or a one-line splat (`... .ps1 @applyArgs`). Walk the
-            # continuation lines rather than trying to express them in one regex.
-            $lines = $script:WfText -split "\r?\n"
-            $blocks = [System.Collections.Generic.List[string]]::new()
-            for ($i = 0; $i -lt $lines.Count; $i++) {
-                if ($lines[$i] -notmatch '\./scripts/Deploy-(?:Labels|DLPPolicies)\.ps1') { continue }
-                $sb = [System.Text.StringBuilder]::new($lines[$i])
-                $j = $i
-                while ($j -lt $lines.Count - 1 -and $lines[$j].TrimEnd().EndsWith('`')) {
-                    $j++
-                    [void]$sb.AppendLine()
-                    [void]$sb.Append($lines[$j])
-                }
-                $blocks.Add($sb.ToString())
-            }
-            $blocks.Count | Should -BeGreaterThan 0
-
-            foreach ($block in $blocks) {
-                # A splatted invocation carries Confirm inside the hashtable
-                # built just above it; that is asserted by the next It block.
-                if ($block -match '@\w+\s*$') { continue }
-                $block | Should -Match '-Confirm:\$false' -Because "invocation '$($block.Trim())' must bind -Confirm:`$false or it hangs at ConfirmImpact='High'"
+            $script:Probe = {
+                param([string]$Text)
+                $failures = [System.Collections.Generic.List[object]]::new()
+                $block = [pscustomobject]@{ File = 'probe.yml'; Line = 1; Text = $Text }
+                @(Get-CiInvocationSite -Block $block -GatedScripts @('Deploy-Labels.ps1') -ParseFailure ([ref]$failures))
             }
         }
 
-        It 'binds Confirm = $false in every splatted argument hashtable' {
-            $splats = [regex]::Matches($script:WfText, '\$applyArgs\s*=\s*@\{(?<body>[^}]*)\}')
-            foreach ($s in $splats) {
-                $s.Groups['body'].Value | Should -Match 'Confirm\s*=\s*\$false'
-            }
+        It 'does NOT flag a script name used as a string literal (the validate.yml $exempt shape)' {
+            $sites = & $script:Probe @"
+`$exempt = @(
+    'Deploy-Labels.ps1',
+    'Deploy-Classifications.ps1'
+)
+Get-ChildItem -Path scripts -Filter 'Deploy-*.ps1' | ForEach-Object {
+    if (`$exempt -contains `$_.Name) { return }
+}
+"@
+            @($sites).Count | Should -Be 0 -Because 'a StringConstantExpressionAst inside an array literal is a MENTION, not a CommandAst. Flagging it would be a false positive on validate.yml.'
+        }
+
+        It 'DOES flag a direct invocation that binds no suppressor' {
+            $sites = & $script:Probe './scripts/Deploy-Labels.ps1 -DirectionPolicy repo-wins'
+            @($sites).Count | Should -Be 1
+            @($sites[0].Suppressors).Count | Should -Be 0
+        }
+
+        It 'accepts -Confirm:$false, and -WhatIf, as suppressors' {
+            @((& $script:Probe './scripts/Deploy-Labels.ps1 -Confirm:$false')[0].Suppressors).Count | Should -BeGreaterThan 0
+            @((& $script:Probe './scripts/Deploy-Labels.ps1 -WhatIf')[0].Suppressors).Count | Should -BeGreaterThan 0
+        }
+
+        It 'REJECTS -Force as a suppressor (it silences the gate, not ShouldProcess)' {
+            # The one place this guard contradicts the rollout brief. See the
+            # BeforeAll note: verified against a live ConfirmImpact='High' probe --
+            # `-Force` alone THROWS in a non-interactive host rather than proceeding.
+            @((& $script:Probe './scripts/Deploy-Labels.ps1 -Force')[0].Suppressors).Count | Should -Be 0 `
+                -Because '-Force is a custom switch. It suppresses ConfirmGate and does nothing whatever to $PSCmdlet.ShouldProcess, which consults only $ConfirmPreference.'
+        }
+
+        It 'REJECTS an explicit -Confirm:$true' {
+            @((& $script:Probe './scripts/Deploy-Labels.ps1 -Confirm:$true')[0].Suppressors).Count | Should -Be 0
+        }
+
+        It 'reads Confirm = $false out of a splatted hashtable' {
+            $sites = & $script:Probe @"
+`$applyArgs = @{
+    DirectionPolicy = 'portal-wins'
+    Confirm         = `$false
+}
+./scripts/Deploy-Labels.ps1 @applyArgs
+"@
+            @($sites).Count | Should -Be 1
+            @($sites[0].Suppressors).Count | Should -BeGreaterThan 0
+        }
+
+        It 'does NOT accept a splat whose hashtable omits Confirm' {
+            $sites = & $script:Probe @"
+`$applyArgs = @{ DirectionPolicy = 'repo-wins' }
+./scripts/Deploy-Labels.ps1 @applyArgs
+"@
+            @($sites).Count | Should -Be 1
+            @($sites[0].Suppressors).Count | Should -Be 0
+        }
+
+        It 'matches the glob-dispatch shape and charges it with every gated script' {
+            $sites = & $script:Probe @"
+`$reconcilers = Get-ChildItem -Path scripts/Deploy-*.ps1 | Where-Object {
+    (Get-Content `$_.FullName -Raw) -match 'SupportsShouldProcess'
+}
+foreach (`$s in `$reconcilers) {
+    `$output = & `$s.FullName -WhatIf 2>&1 | Out-String
+}
+"@
+            @($sites).Count | Should -Be 1
+            $sites[0].Kind | Should -BeExactly 'glob-dispatch'
+            @($sites[0].Suppressors) | Should -Contain '-WhatIf'
+        }
+
+        It 'flags a glob dispatch that binds NO suppressor' {
+            $sites = & $script:Probe @"
+`$reconcilers = Get-ChildItem -Path scripts/Deploy-*.ps1
+foreach (`$s in `$reconcilers) { & `$s.FullName -DirectionPolicy repo-wins }
+"@
+            @($sites).Count | Should -Be 1
+            @($sites[0].Suppressors).Count | Should -Be 0 -Because 'the weekly glob loop is exactly where an unsuppressed invocation would hang for six hours before the job timed out'
         }
     }
 }
@@ -2338,16 +2764,17 @@ Describe 'ADR 0052 rollout completion (#83): every reconciler gated, or declared
         }
     }
 
-    # ---- THE COMPLETION CRITERION. A LIVE TODO LIST. ----
+    # ---- THE COMPLETION CRITERION. NOW GREEN -- KEEP IT THAT WAY. ----
     #
-    # ============================ EXPECTED RED ============================
-    # This assertion FAILS until PR-B batch 2 lands, and that is CORRECT. Eleven
-    # Class A reconcilers are still ungated. It is not a broken test -- it is the
-    # rollout's remaining work, stated executably, and it turns GREEN exactly when
-    # #83 is done. Do NOT weaken it to make the suite green; batch 2 is what makes
-    # it green.
-    # ======================================================================
-    It 'EXPECTED RED until PR-B batch 2: every Deploy-*.ps1 is gated, or declared ungated' {
+    # This assertion was EXPECTED RED through batches 1 and 2, by design: it was the
+    # rollout's remaining work stated executably. Batch 2 gated the last eleven Class A
+    # reconcilers and it turned GREEN. It is now a RATCHET, not a to-do list.
+    #
+    # It goes red again if anyone adds a Deploy-*.ps1 that can delete or revoke tenant
+    # state without gating it. The fix is to GATE IT -- or to declare it in
+    # $script:UngatedByDesign with a stated, mechanically-verifiable reason, which the
+    # staleness guard above then refuses to let rot.
+    It 'every Deploy-*.ps1 is gated, or declared ungated (the #83 completion criterion)' {
         $accountedFor = @(($script:GatedNow + $script:ExemptNames) | Sort-Object -Unique)
         $missing = @($script:AllReconcilersOnDisk | Where-Object { $_ -notin $accountedFor })
 

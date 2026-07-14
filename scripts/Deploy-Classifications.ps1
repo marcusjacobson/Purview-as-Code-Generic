@@ -127,10 +127,12 @@
     overwrite, it does not hide the finding. A write over a foreign-authored
     object is ALWAYS reported as a `Conflict` row, never laundered into a
     plain `Update`.
-    Requires `-DirectionPolicy repo-wins` to have any effect: the direction
-    policy and the authorship override are independent axes and both must
-    permit the write. Under the default `portal-wins` a drifted object is
-    skipped whatever its authorship. Default `$false`.
+    This script declares NO `-DirectionPolicy` -- it is a Class B reconciler
+    (prune-only destructive branch, no direction-policy overwrite branch), so
+    authorship is the ONLY axis arbitrating an `Update` write here. Do not
+    read across from the Class A reconcilers: there is no `repo-wins` to pair
+    this switch with, and passing one is a parameter-binding error.
+    Default `$false`.
     Reference: docs/adr/0053-overwrite-foreign-author-switch.md.
 
 .PARAMETER ExportCurrentState
