@@ -18,7 +18,16 @@
     directory-role surfaces (groups, S&C role groups, Microsoft Purview
     Data Map roles) live in their own siblings under `data-plane/**`.
 
-    For each row in `directoryRoles:`:
+    Reconciliation is two-phase (ADR 0052), because this reconciler manages
+    a PERMISSIONS surface: Phase 1 computes the complete plan across every
+    row in `directoryRoles:` with zero tenant writes; Phase 3 applies that
+    same plan. There is no reconnect step in between -- unlike
+    `Deploy-PurviewRoleGroups.ps1`, whose own Phase 2 rebinds a degrading
+    IPPS session, this script authenticates via a single Graph REST access
+    token acquired once (see .NOTES), which does not degrade under read
+    volume.
+
+      Phase 1 (read + plan; no tenant writes), for every row:
       1. Resolve the role definition. If the row supplies a `templateId:`
          GUID (recommended), use it directly as the
          `unifiedRoleDefinition.id` -- per Microsoft Graph, the `id` of a
@@ -37,9 +46,23 @@
          filtered by `roleDefinitionId` from
          `/v1.0/roleManagement/directory/roleAssignments`.
       4. Compute drift (Create / NoChange / Revoke / NoOp) per (role,
-         scope, principal) triple and emit a categorized report.
+         scope, principal) triple. Emit the informational NoChange / NoOp
+         report rows immediately; accumulate the Create / Revoke rows into
+         a per-row plan entry (role, scope, resolved role-definition id,
+         validated Create object IDs, and the Revoke object IDs together
+         with their tenant assignment IDs, which Phase 3's DELETE needs).
+
+      ADR 0052 gate: when `-PruneMissing` is supplied and the accumulated
+      plan carries at least one Revoke across any row, the operator is
+      asked to confirm once before Phase 3 runs. Declining throws and
+      leaves the tenant untouched -- for every row, not only the ones not
+      yet reached. See
+      `docs/adr/0052-destructive-confirmation-gate-at-script-layer.md`.
+
+      Phase 3 (write), iterating the SAME plan Phase 1 built:
       5. Apply Create rows always; apply Revoke rows only with
-         `-PruneMissing`. Both gated by `ShouldProcess`.
+         `-PruneMissing`. Both are additionally gated per-write by
+         `ShouldProcess`.
 
     `-ExportCurrentState` reads every in-scope role's current assignments
     at directory scope `/` and rewrites the `directoryRoles:` block of
@@ -55,8 +78,10 @@
     superseded by ADR 0011 Decision #3 (the cert is non-exportable in Key Vault).
 
     Supports both `-WhatIf` (no remote calls; planned-behaviour banner)
-    and `-Confirm`. ConfirmImpact is `Medium`; explicit `-Confirm:$false`
-    is honored.
+    and `-Confirm`. ConfirmImpact is `High` (ADR 0052): a `-PruneMissing`
+    run whose plan carries at least one Revoke prompts once via
+    `Assert-DestructiveOperationConfirmed` unless `-Force` or an explicit
+    `-Confirm:$false` is supplied.
 
     References (Microsoft Learn):
       Permissions in the Microsoft Purview portal:
@@ -83,6 +108,7 @@
       ADR 0010 (Automation Identity):    ../docs/adr/0010-automation-identity-subject-model.md
       ADR 0011 (Certificate Lifecycle):  ../docs/adr/0011-certificate-lifecycle.md
       ADR 0012 (Environment Parameters): ../docs/adr/0012-environment-parameters-file.md
+      ADR 0052 (Destructive confirmation gate): ../docs/adr/0052-destructive-confirmation-gate-at-script-layer.md
 
 .PARAMETER Path
     Path to the desired-state YAML. Defaults to
@@ -95,10 +121,14 @@
     rows and skipped. Destructive; defaults to `$false`.
 
 .PARAMETER Force
-    Permit `-ExportCurrentState` to overwrite a `directoryRoles:` block
-    that already declares one or more entries. Has no effect in Apply
-    mode (the script does not silently overwrite tenant state regardless
-    of `-Force`).
+    Two independent meanings, one per parameter set (ADR 0052 section 6 /
+    ADR 0053 section 2): with `-ExportCurrentState`, permit overwriting a
+    `directoryRoles:` block that already declares one or more entries; on
+    the Apply path, suppress the ADR 0052 `-PruneMissing` revoke
+    confirmation prompt. The two never overlap. `-Force` does not make
+    Apply mode silently overwrite tenant state in any other way -- it
+    still only ever creates or revokes assignments explicitly declared or
+    implied by the YAML.
 
 .PARAMETER ExportCurrentState
     Read live assignments for the three in-scope directory roles at
@@ -176,7 +206,14 @@
     OIDs) are not echoed at INFO level.
 #>
 #Requires -Version 7.4
-[CmdletBinding(SupportsShouldProcess = $true, ConfirmImpact = 'Medium', DefaultParameterSetName = 'Apply')]
+# ConfirmImpact = 'High' is load-bearing, not decorative. PowerShell only
+# raises a ShouldProcess confirmation when ConfirmImpact >= $ConfirmPreference,
+# and $ConfirmPreference defaults to 'High'. This script shipped 'Medium'
+# until issue #105, so every $PSCmdlet.ShouldProcess(...) call below returned
+# $true without ever prompting (the issue #85 defect). Do not lower it back
+# to 'Medium'.
+# Reference: docs/adr/0052-destructive-confirmation-gate-at-script-layer.md
+[CmdletBinding(SupportsShouldProcess = $true, ConfirmImpact = 'High', DefaultParameterSetName = 'Apply')]
 param(
     [Parameter(ParameterSetName = 'Apply')]
     [Parameter(ParameterSetName = 'Export')]
@@ -456,6 +493,14 @@ if (-not (Get-Module -ListAvailable -Name 'powershell-yaml')) {
     Install-Module -Name 'powershell-yaml' -Scope CurrentUser -Force -AllowClobber
 }
 Import-Module 'powershell-yaml' -ErrorAction Stop
+
+# In-repo ADR 0052 destructive-operation confirmation gate. Wraps
+# $PSCmdlet.ShouldContinue() -- which prompts unconditionally, independent
+# of $ConfirmPreference -- so the -PruneMissing revoke branch cannot be
+# entered unattended from a local terminal.
+# Reference: docs/adr/0052-destructive-confirmation-gate-at-script-layer.md
+Import-Module (Join-Path $PSScriptRoot 'modules/ConfirmGate.psm1') `
+    -Force -Scope Local -ErrorAction Stop
 
 #endregion
 
@@ -784,7 +829,34 @@ try {
         #endregion
     }
 
-    #region Apply mode
+    #region Apply mode: two-phase reconciliation (issue #105)
+    # This reconciler manages Microsoft Entra directory-role assignments --
+    # a PERMISSIONS surface -- so the ADR 0052 confirmation gate must see
+    # the FULL revoke plan, across every row, before any tenant write.
+    #
+    # The original shape was single-pass and INTERLEAVED: read a row's
+    # current assignments, POST its creates, DELETE its revokes, then move
+    # to the next row. Under that shape row 2's revoke plan did not exist
+    # until row 1's writes had already landed, so no gate site could ever
+    # make "No tenant writes were made" TRUE on decline -- the only choices
+    # were "lie" or "restructure" (issue #105).
+    #
+    # Fixed by splitting into two phases, mirroring
+    # `Deploy-PurviewRoleGroups.ps1` (Phase 1 -> ADR 0052 gate -> Phase 3):
+    #   1. Read phase: for every row, resolve the role definition, validate
+    #      members, read current assignments, diff, and accumulate a
+    #      per-row plan entry. Zero remote writes.
+    #   3. Write phase: iterate the SAME plan the read phase built, applying
+    #      Create rows always and Revoke rows only with -PruneMissing.
+    #
+    # No reconnect step in between (no Phase 2), unlike the RoleGroups
+    # reconciler: that script's Phase 2 rebinds an Exchange Online /
+    # Security & Compliance PowerShell session that degrades under a
+    # high-volume read loop. This script authenticates via a single Graph
+    # REST access token acquired once above ($accessToken, via
+    # Get-PurviewIPPSAccessToken.ps1), which has no analogous session to
+    # degrade -- so a reconnect step here would be inventing a fix for a
+    # problem this script does not have.
 
     if ($desiredEntries.Count -eq 0) {
         Write-Information 'No directory roles declared in YAML. Nothing to reconcile.' -InformationAction Continue
@@ -796,6 +868,8 @@ try {
     $roleDefIdCache  = @{}
     $groupCheckCache = @{}
 
+    # ---- Phase 1: Read + categorize (no remote writes) ----
+    $plan = New-Object 'System.Collections.Generic.List[object]'
     foreach ($row in $desiredEntries) {
         $rowName  = [string]$row.name
         $rowScope = if ($row.ContainsKey('scope') -and -not [string]::IsNullOrWhiteSpace([string]$row.scope)) {
@@ -823,6 +897,9 @@ try {
                 }
             }
             catch {
+                # A Phase 1 failure on ANY row aborts the WHOLE run before
+                # any write for ANY row -- not just this one. Phase 3 has
+                # not started, so this is still a zero-write abort.
                 Write-Error ("Failed to resolve role '{0}': {1}" -f $rowName, $_.Exception.Message)
                 return
             }
@@ -853,11 +930,15 @@ try {
             $currentAssigns = Get-AssignmentsForRoleScope -RoleDefinitionId $roleDefId -DirectoryScopeId $rowScope -AccessToken $accessToken
         }
         catch {
+            # Same abort-the-whole-run contract as role resolution, above:
+            # Phase 3 has not started, so no write has fired for any row.
             Write-Error ("Failed to read assignments for role '{0}' at scope '{1}': {2}" -f $rowName, $rowScope, $_.Exception.Message)
             return
         }
 
-        # Build map: principalId -> assignment id (for DELETE).
+        # Build map: principalId -> assignment id. Phase 3's DELETE
+        # addresses a roleAssignment by its own id, not by principal, so
+        # this map -- not just the oid list -- must travel with the plan.
         $tenantMap = @{}
         foreach ($a in $currentAssigns) {
             $principalOid = [string]$a.principalId
@@ -897,8 +978,112 @@ try {
             }
         }
 
+        # Accumulate this row into the plan Phase 3 will iterate. A row
+        # with neither a Create nor an in-scope Revoke has nothing left for
+        # Phase 3 to do and is omitted -- mirrors
+        # Deploy-PurviewRoleGroups.ps1's identical Phase 1 condition.
+        if ($toCreate.Count -gt 0 -or ($PruneMissing.IsPresent -and $toRevoke.Count -gt 0)) {
+            $plan.Add([pscustomobject]@{
+                RowName   = $rowName
+                RowScope  = $rowScope
+                RoleDefId = $roleDefId
+                ToCreate  = @($toCreate)
+                ToRevoke  = @($toRevoke)
+                TenantMap = $tenantMap
+            })
+        }
+    }
+
+    # ---- ADR 0052: destructive-operation confirmation gate ----
+    # The last point before Phase 3 at which nothing has been written. This
+    # script is Class B: it declares no -DirectionPolicy, so it has no
+    # repo-wins overwrite branch and exactly ONE destructive branch -- the
+    # -PruneMissing revoke. That branch is gated here, once per run, via
+    # $PSCmdlet.ShouldContinue() -- NOT ShouldProcess(). ShouldContinue
+    # prompts unconditionally; ShouldProcess only prompts when
+    # ConfirmImpact >= $ConfirmPreference, which is precisely the
+    # comparison that silently defeated this gate before issue #85.
+    #
+    # The gate is keyed on the PLAN -- $revokes is the flattened union of
+    # the very ToRevoke collections the Phase 3 revoke loop iterates -- and
+    # never on a policy. Phase 3 guards that loop with
+    # `if (-not $PruneMissing.IsPresent) { continue }`, so the gate's
+    # `$PruneMissing.IsPresent -and $revokes.Count -gt 0` condition is
+    # exactly the reachability condition of the writes it speaks for.
+    # (A $plan entry can carry a non-empty ToRevoke without -PruneMissing,
+    # because Phase 1 admits an entry on ToCreate alone -- hence the
+    # -PruneMissing conjunct here is a PLAN predicate, not a policy one.)
+    #
+    # $revokes is built directly from $plan -- the same collection Phase 3
+    # reads immediately below -- with no separate shadow list and no
+    # lifetime between construction and read. There is therefore no window
+    # in which policy (or anything else) could desynchronize the gate's
+    # count from the writes it is about to authorize: shrinking $revokes
+    # would require shrinking $plan itself, which would shrink the actual
+    # Phase 3 revoke loop identically. That is the same structural immunity
+    # ADR 0052's reference implementations rely on for their prune gates
+    # (issue #103); this script has no overwrite gate to which the B2
+    # data-laundering hazard could even apply.
+    #
+    # REVOKE, not DELETE: DELETE /roleManagement/directory/roleAssignments/{id}
+    # drops a permission grant; it does not delete the underlying Entra
+    # group or the role definition. Matches
+    # Deploy-PurviewRoleGroups.ps1's own "REVOKE, not DELETE" framing.
+    #
+    # This `throw` sits inside the enclosing try/finally. There is no
+    # `catch`, so a decline propagates out of the script (after the
+    # `finally` drops the access token) rather than being swallowed and
+    # falling through into Phase 3.
+    #
+    # Suppressed by -Force, by an explicit -Confirm:$false (the CI path),
+    # and skipped under -WhatIf so a dry run still previews the revokes
+    # without blocking on input. (The Apply-mode -WhatIf short-circuit
+    # above returns before Phase 1 ever runs, so in practice this gate is
+    # unreached under -WhatIf today -- -IsWhatIf is still bound correctly
+    # below so the gate remains safe if that short-circuit is ever
+    # narrowed to cover fewer cases.)
+    # Reference: docs/adr/0052-destructive-confirmation-gate-at-script-layer.md
+    $yesToAll = $false
+    $noToAll = $false
+    $confirmBound = $PSCmdlet.MyInvocation.BoundParameters.ContainsKey('Confirm')
+    $confirmValue = if ($confirmBound) { [bool]$PSCmdlet.MyInvocation.BoundParameters['Confirm'] } else { $false }
+    $gateArgs = @{
+        Cmdlet       = $PSCmdlet
+        Caption      = 'Destructive operation (ADR 0052)'
+        YesToAll     = ([ref]$yesToAll)
+        NoToAll      = ([ref]$noToAll)
+        Force        = $Force.IsPresent
+        IsWhatIf     = [bool]$WhatIfPreference
+        ConfirmBound = $confirmBound
+        ConfirmValue = $confirmValue
+    }
+
+    # One entry per assignment the Phase 3 revoke loop would drop. The
+    # principal's Entra object ID is deliberately NOT interpolated into the
+    # prompt -- the operator is shown the role and scope plus a count,
+    # matching the '<oid>' redaction the drift report already uses.
+    $revokes = @(foreach ($p in $plan) {
+            foreach ($oid in $p.ToRevoke) { ("{0} @ {1}" -f $p.RowName, $p.RowScope) }
+        })
+    if ($PruneMissing.IsPresent -and $revokes.Count -gt 0) {
+        $revokeSummary = @($revokes | Group-Object | Sort-Object Name |
+                ForEach-Object { '{0} ({1} assignment(s))' -f $_.Name, $_.Count })
+        $pruneQuery = "-PruneMissing will REVOKE {0} Microsoft Entra directory-role assignment(s) from the tenant: {1}. Each revoked assignment drops the permissions that directory role confers. This cannot be undone. Continue?" -f `
+            $revokes.Count, ($revokeSummary -join ', ')
+        if (-not (Assert-DestructiveOperationConfirmed @gateArgs -Query $pruneQuery)) {
+            throw 'Aborted by operator at the -PruneMissing revoke confirmation gate (ADR 0052). No tenant writes were made.'
+        }
+    }
+
+    # ---- Phase 3: Write, over the SAME plan Phase 1 built ----
+    foreach ($entry in $plan) {
+        $rowName   = $entry.RowName
+        $rowScope  = $entry.RowScope
+        $roleDefId = $entry.RoleDefId
+        $tenantMap = $entry.TenantMap
+
         # Create rows.
-        foreach ($oid in $toCreate) {
+        foreach ($oid in $entry.ToCreate) {
             $reportRow = [pscustomobject]@{
                 Category = 'Create'
                 Kind     = 'DirectoryRoleAssignment'
@@ -938,7 +1123,7 @@ try {
         if (-not $PruneMissing.IsPresent) { continue }
 
         # Revoke rows.
-        foreach ($oid in $toRevoke) {
+        foreach ($oid in $entry.ToRevoke) {
             $assignmentId = [string]$tenantMap[$oid]
             $reportRow = [pscustomobject]@{
                 Category = 'Revoke'
