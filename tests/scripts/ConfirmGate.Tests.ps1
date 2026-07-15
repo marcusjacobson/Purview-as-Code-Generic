@@ -2774,6 +2774,19 @@ Describe 'ADR 0052 rollout completion (#83): every reconciler gated, or declared
     # state without gating it. The fix is to GATE IT -- or to declare it in
     # $script:UngatedByDesign with a stated, mechanically-verifiable reason, which the
     # staleness guard above then refuses to let rot.
+    #
+    # ⚠️ BOUNDARY -- READ BEFORE TRUSTING THE WORD "COMPLETE".
+    # $script:AllReconcilersOnDisk is a `Deploy-*.ps1` GLOB (see the BeforeAll above).
+    # So this criterion proves "every DEPLOY-* reconciler is gated", NOT "every
+    # reconciler in the repo is gated". Those differ: `Set-AuditRetentionPolicy.ps1`
+    # declares -PruneMissing, calls Remove-UnifiedAuditLogRetentionPolicy, is
+    # ConfirmImpact='Medium' (the live issue #85 defect), has NO gate and NO workflow
+    # behind it -- and this assertion is BLIND TO IT because its name is Set-*, not
+    # Deploy-*. Tracked by issue #108, whose fix WIDENS this population from the
+    # filename glob to a destructive-capability predicate (every script declaring
+    # -PruneMissing). Until #108 lands, GREEN here means "the Deploy-* glob is fully
+    # gated", nothing wider. The glob that defines the population is exactly where the
+    # gap hid -- do not let this assertion's green be read as more than it proves.
     It 'every Deploy-*.ps1 is gated, or declared ungated (the #83 completion criterion)' {
         $accountedFor = @(($script:GatedNow + $script:ExemptNames) | Sort-Object -Unique)
         $missing = @($script:AllReconcilersOnDisk | Where-Object { $_ -notin $accountedFor })
