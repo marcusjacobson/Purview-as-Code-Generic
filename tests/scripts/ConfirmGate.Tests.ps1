@@ -1087,24 +1087,17 @@ BeforeAll {
     # THE ONE DECLARED EXCEPTION to the #83 completion criterion, in the ADR 0056
     # "carve-out with a stated reason, mechanically re-verified" idiom.
     #
-    #   Deploy-EntraDirectoryRoles.ps1 -- tracked by issue #105.
-    #
-    # REASON. Its reconcile loop (:799-973) is single-pass and INTERLEAVED: it POSTs
-    # role assignments (:913) BEFORE it has computed the full revoke plan (:954). The
-    # gate's contract requires that the decline branch throw
-    # 'No tenant writes were made' -- and there is no point in that loop where that
-    # sentence is TRUE and the revoke set is yet known. Gating it therefore needs a
-    # two-phase (plan-then-apply) restructure of a PERMISSIONS-surface reconciler,
-    # which the owner ruled out of PR-B's scope and into its own PR (#105).
-    #
-    # THE EXCEPTION FAILS CLOSED ON STALENESS. A separate assertion below pins that
-    # this script still has ZERO gate calls. The moment #105 gates it, that assertion
-    # goes RED and forces this carve-out to be DELETED. An exception nobody is forced
-    # to remove is how a "temporary" gap becomes permanent -- and a carve-out that can
-    # go stale is precisely the erosion this suite exists to prevent.
-    $script:UngatedByDesign = @{
-        'Deploy-EntraDirectoryRoles.ps1' = 'issue #105 -- interleaved single-pass reconcile loop; POSTs creates before the revoke plan exists, so no gate site satisfies "No tenant writes were made". Needs a two-phase restructure; out of PR-B scope by owner ruling.'
-    }
+    # #105 LANDED: Deploy-EntraDirectoryRoles.ps1 was the sole declared exception
+    # (interleaved single-pass reconcile loop; POSTed creates before the revoke plan
+    # existed, so no gate site could ever make "No tenant writes were made" TRUE on
+    # decline). It has been restructured to the same two-phase (plan-then-apply)
+    # shape as `Deploy-PurviewRoleGroups.ps1` and now carries its own ADR 0052 gate,
+    # so the carve-out below is EMPTY -- the staleness guard two Describes down would
+    # have gone RED the moment a gate call appeared here if the entry had not been
+    # removed. Nothing else has ever needed one. Keep the table so a future author
+    # who genuinely cannot gate a new destructive-capable script has somewhere to
+    # state why, with the same mechanical re-verification.
+    $script:UngatedByDesign = @{}
 
     # Every script the AST contract ACTUALLY examined, recorded at RUN time by each
     # Context's BeforeAll. Read by the coverage assertion in the final Describe.
@@ -2247,12 +2240,12 @@ Describe 'ADR 0052: CI cannot hang -- every workflow invocation of a GATED scrip
         $script:CiGated.Count | Should -BeGreaterThan 0 -Because 'the gated set is derived from the AST; zero means the derivation broke and every assertion below is vacuous'
         # The gated set is derived twice in this file (here and in the AST-contract
         # BeforeDiscovery). The completion Describe pins that they agree.
-        $script:CiGated.Count | Should -Be 21 -Because (
-            'twenty-one of the twenty-two destructive-capable reconcilers are gated -- #108 widened the population from a ' +
+        $script:CiGated.Count | Should -Be 22 -Because (
+            'all twenty-two destructive-capable reconcilers are gated -- #108 widened the population from a ' +
             'Deploy-*.ps1 filename glob to every script declaring -PruneMissing, adding Set-AuditRetentionPolicy.ps1 as the ' +
-            '22nd. Deploy-EntraDirectoryRoles.ps1 is the one declared exception (issue #105). ' +
-            "Found: $($script:CiGated.Count) -- [$($script:CiGated -join ', ')]. " +
-            'If #105 has landed, this number becomes 22 and $script:UngatedByDesign must be emptied.'
+            '22nd; #105 then closed the last declared exception, Deploy-EntraDirectoryRoles.ps1, by restructuring it to a ' +
+            'two-phase (plan-then-apply) shape so its ADR 0052 gate can see the full revoke plan before any tenant write. ' +
+            "Found: $($script:CiGated.Count) -- [$($script:CiGated -join ', ')]."
         )
     }
 
@@ -2808,10 +2801,12 @@ Describe 'ADR 0052 rollout completion (#83/#108): every reconciler gated, or dec
     # ---- THE STALENESS GUARD ON THE CARVE-OUT. This must be GREEN. ----
     #
     # An exception nobody is forced to remove is how a "temporary" gap becomes
-    # permanent. The moment #105 gates Deploy-EntraDirectoryRoles.ps1, this goes RED
-    # and the next author cannot ignore it: the fix is to DELETE the entry from
-    # $script:UngatedByDesign, which is precisely the bookkeeping that would otherwise
-    # never happen.
+    # permanent. #105 gated Deploy-EntraDirectoryRoles.ps1 and, in the same PR,
+    # deleted its entry from $script:UngatedByDesign -- had it gated the script
+    # without deleting the entry, this assertion would have gone RED immediately,
+    # which is precisely the bookkeeping enforcement this guard exists for. The
+    # table is empty now; the next author who genuinely cannot gate a new
+    # destructive-capable script states why here, and this guard keeps them honest.
     # NOTE ON SHAPE: a single It iterating the table, NOT `-ForEach $script:UngatedByDesign.Keys`.
     # -ForEach is evaluated during DISCOVERY, and $script:UngatedByDesign is defined in
     # the file-level BeforeAll, which runs during RUN -- so at discovery it is $null and
