@@ -203,7 +203,21 @@ jobs:
           # stream (6) and are not captured here. -DirectionPolicy audit
           # forces read-only ($WhatIfPreference); no write fires.
           # Reference: docs/adr/0029-source-of-truth-direction-policy.md
-          $rows = @(./scripts/Deploy-IRMPolicies.ps1 -DirectionPolicy audit)
+          #
+          # -Confirm:$false is REQUIRED, not decorative, and it is NOT made
+          # redundant by `-DirectionPolicy audit`. Deploy-IRMPolicies.ps1's
+          # audit short-circuit does NOT return: it sets
+          # `$WhatIfPreference = $true` and FALLS THROUGH into the plan +
+          # gate + apply region. The ADR 0052 gate is therefore REACHED under
+          # audit, and stays silent only because the gate's -IsWhatIf argument
+          # happens to be bound to $WhatIfPreference. That is a load-bearing
+          # coincidence, not a guarantee -- issue #106 is a live bug of exactly
+          # the class where an audit short-circuit fails to neutralize the
+          # writes. Without this binding, one refactor of that short-circuit
+          # turns this step into a confirmation prompt that nobody can answer
+          # on a hosted runner.
+          # Reference: docs/adr/0052-destructive-confirmation-gate-at-script-layer.md
+          $rows = @(./scripts/Deploy-IRMPolicies.ps1 -DirectionPolicy audit -Confirm:$false)
 
           # Drift = "would change" categories, minus the skip baseline.
           # In audit mode the reconciler emits Create / Update / Orphan
