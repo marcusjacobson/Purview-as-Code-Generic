@@ -33,4 +33,50 @@ A change almost always lives in one plane. Cross-plane PRs require explicit just
 
 Canonical validate / control-plane / data-plane commands: [`.github/instructions/build-deploy.instructions.md`](.github/instructions/build-deploy.instructions.md). Do not invent alternatives.
 
+## Cursor Cloud specific instructions
+
+This repo is infrastructure-as-code (Bicep + PowerShell 7 + YAML) — there is **no runnable server or
+app**. "Running" the project means executing the CI validation gates and the offline posture verifiers.
+The required toolchain is `pwsh` 7.4+, Azure CLI + Bicep CLI, Python 3 + `yamllint`, and the PowerShell
+modules `Pester` (5.x), `PSScriptAnalyzer`, and `powershell-yaml`. Any pre-provisioned VM snapshot or
+startup script that supplies these is Cursor Cloud environment configuration maintained outside this
+repo — no `.cursor/` config is tracked here — so verify the tools are present rather than assume them.
+
+The full local CI mirror is [`.github/workflows/validate.yml`](.github/workflows/validate.yml). Its
+gates (currently ten) are the source of truth — re-derive this table from that file if the job set
+changes. Every gate runs without a tenant:
+
+| Gate | Local equivalent |
+| :--- | :--- |
+| `bicep` | `az bicep lint --file infra/main.bicep`, then `az bicep build --file infra/main.bicep --outfile <tempfile>` |
+| `yaml` | `yamllint -d '{extends: default, rules: {line-length: disable, document-start: disable}}' data-plane/ examples/` — `examples/` is linted alongside `data-plane/` per [ADR 0056](docs/adr/0056-template-ships-empty-desired-state.md) |
+| `powershell` | `Invoke-ScriptAnalyzer -Path scripts -Recurse -Severity Warning -EnableExit` |
+| `actionlint` | the standalone [`actionlint`](https://github.com/rhysd/actionlint) release binary against `.github/workflows/**` — it is not preinstalled; download the binary first |
+| `identifier-residue` | `pwsh ./scripts/Test-IdentifierResidue.ps1` — needs the `powershell-yaml` module; exits 1 on any Finding ([ADR 0055](docs/adr/0055-identifier-shaped-residual-scan.md)) |
+| `pester` | `pwsh ./tests/Run-Pester.ps1` |
+| `dspm-posture` | `pwsh ./scripts/Test-DSPMPosture.ps1` |
+| `dspm-ai-posture` | `pwsh ./scripts/Test-DSPMforAIPosture.ps1` |
+| `full-circle-contract-guard` | no standalone script — an inline `pwsh` step in `validate.yml` that fails when a non-exempt `scripts/Deploy-*.ps1` lacks any of the `SupportsShouldProcess`, `PruneMissing`, or `ExportCurrentState` contract tokens |
+| `landing-page-embeds` | `pwsh ./scripts/Update-LandingPageEmbeds.ps1 -Check` |
+
+Canonical deploy commands live in
+[`.github/instructions/build-deploy.instructions.md`](.github/instructions/build-deploy.instructions.md)
+— do not invent alternatives.
+
+- **Pester must be 5.x, never 6.x.** [`tests/Run-Pester.ps1`](tests/Run-Pester.ps1) selects the
+  *highest* installed Pester `>= 5.5.0`. Pester 6 changes `Mock` command resolution and breaks the
+  mock-based tests in `tests/scripts/Export-ContentExplorerData.Tests.ps1`
+  (`CommandNotFoundException: Could not find Command Install-Module`). CI stays on 5.x only because
+  `windows-latest` ships Pester 5.x preinstalled. Keep a Pester 5.x present and do **not** leave
+  Pester 6 installed, or the runner will pick it up. Pester `5.7.1` is a known-good pin; the Cursor
+  Cloud update script that applies it is environment configuration maintained outside this repo.
+- **`Deploy-*.ps1` reconcilers and `Invoke-*SmokeTest.ps1` require a live Azure/M365 tenant** (OIDC +
+  Key Vault certificate auth via `scripts/Connect-Purview.ps1` / `Connect-IPPSSession`). Even the
+  `-WhatIf` / `-ExportCurrentState` read paths open a tenant session, so they cannot run in the
+  Cursor Cloud VM (no tenant credentials). Local validation is limited to the gates above; live
+  deploy and smoke testing are out of scope.
+- The `Test-DSPMPosture.ps1` / `Test-DSPMforAIPosture.ps1` verifiers are the best offline smoke test
+  of the data-plane engine — they parse, schema-validate, and cross-reference the real
+  `data-plane/**` manifests without any tenant call.
+
 Reference: [agents.md convention](https://agents.md/), [Custom instructions in VS Code](https://code.visualstudio.com/docs/copilot/customization/custom-instructions).
