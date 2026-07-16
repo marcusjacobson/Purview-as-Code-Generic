@@ -107,13 +107,14 @@ See [`instructions/security.instructions.md`](instructions/security.instructions
 
 ## Environment and identifier boundaries
 
-This repo targets exactly one deployment environment: **`lab`**, backed by the `contoso-lab` Microsoft Purview account in the tenant `contoso.onmicrosoft.com`. The agent must treat this as a hard scope boundary.
+This repo ships two deployment environments per [ADR 0057](../docs/adr/0057-multi-environment-and-branch-model.md): **`lab`** (the default, backed by the `contoso-lab` Microsoft Purview account in the tenant `contoso.onmicrosoft.com`) and an optional **`dev`** (an operator-provisioned second GitHub Environment with its own OIDC credentials and configuration). The agent must treat this two-environment set as a hard scope boundary.
 
 ### Environment rules
 
-- Unless a PR *explicitly* adds a new environment (with reviewer approval and its own GitHub Environment, secrets, and federated credentials), every workflow, Bicep parameter file, PowerShell script, and sample command targets `lab`.
-- Never emit `environment: prod` (or `dev`, `stage`, `qa`, etc.) into a workflow, Bicep, YAML, or shell snippet. If a multi-environment story is requested, propose it as a design PR first and cite the [Environments for deployment](https://docs.github.com/en/actions/deployment/targeting-different-environments/using-environments-for-deployment) docs.
-- Resource group: `rg-purview-lab`. Region: `eastus`. Do not substitute other resource groups or regions in examples.
+- Every tenant-touching workflow routes by the ADR 0057 contract: an `environment` dispatch input (choice `lab` | `dev`, default `lab`) and the canonical branch mapping `${{ inputs.environment || (github.ref_name == 'dev' && 'dev' || 'lab') }}` — branch `dev` → `dev`, every other branch → `lab`. Keep the expression byte-identical; [`tests/workflows/EnvironmentRouting.Tests.ps1`](../tests/workflows/EnvironmentRouting.Tests.ps1) pins it. Key Vault unlocks pair `lab` → `kv-unlock`, `dev` → `kv-unlock-dev`.
+- Tenant-specific non-secret values come from the selected Environment's **variables** (`PURVIEW_RG`, `TENANT_DOMAIN`, `DATA_PLANE_CERT_NAME`, `KEY_VAULT_NAME`, `PURVIEW_ACCOUNT_NAME`); IDs stay in Environment **secrets**. Never hardcode either into a workflow, script, or sample.
+- Never emit any further environment name (`prod`, `stage`, `qa`, etc.) into a workflow, Bicep, YAML, or shell snippet. A third environment requires its own design PR first (ADR 0057 is the precedent) citing the [Environments for deployment](https://docs.github.com/en/actions/deployment/targeting-different-environments/using-environments-for-deployment) docs, with reviewer approval and its own GitHub Environment, secrets, and federated credentials.
+- Sample commands and worked examples target `lab`. Resource group: `rg-purview-lab`. Region: `eastus`. Do not substitute other resource groups or regions in examples; a `dev` example must derive its values from `infra/parameters/dev.yaml` / Environment variables, never literals.
 
 ### Identifier rules
 
@@ -148,7 +149,7 @@ Real identifiers are reconnaissance-grade data. Treat them the same way you trea
 ### Reviewer and agent obligations
 
 - Reject any PR diff that contains a 32-character hex or GUID pattern that does not match the zero-GUID placeholder. Grep: `grep -E '[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}'` — every match must either be the zero GUID, a schema example, or a role-definition GUID from `learn.microsoft.com`.
-- Reject any PR that introduces a second environment without the explicit reviewer approval described in the [pull request description rules](instructions/pull-request.instructions.md).
+- Reject any PR that introduces an environment beyond the ADR 0057 pair (`lab`, `dev`) without the explicit reviewer approval described in the [pull request description rules](instructions/pull-request.instructions.md) and its own design ADR.
 
 ## Naming convention
 

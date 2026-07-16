@@ -16,9 +16,17 @@ app per workflow file**, not a single shared app:
 
 > [!IMPORTANT]
 > The subject **must** be `:environment:<env>` (matching the `environment:` declared by each
-> workflow job), **not** `:ref:refs/heads/main`. Each deploy job declares `environment: lab`
-> (or `kv-unlock`), so a `ref:`-shaped credential fails `azure/login` with a subject/audience
-> mismatch. See [Configuring OpenID Connect in Azure](https://learn.microsoft.com/en-us/azure/developer/github/connect-from-azure-openid-connect).
+> workflow job), **not** `:ref:refs/heads/main`. Each deploy job derives its environment from
+> the `environment` dispatch input (`lab` default, `dev` optional; branch `dev` → `dev`, every
+> other branch → `lab` per [ADR 0057](adr/0057-multi-environment-and-branch-model.md)), and
+> `kv-temp-unlock` pairs to `kv-unlock` / `kv-unlock-dev` — so a `ref:`-shaped credential fails
+> `azure/login` with a subject/audience mismatch. See
+> [Configuring OpenID Connect in Azure](https://learn.microsoft.com/en-us/azure/developer/github/connect-from-azure-openid-connect).
+> Running the optional `dev` environment means one **additional** federated credential per app —
+> subject `repo:<org>/<repo>:environment:dev` (and `…:environment:kv-unlock-dev` on the
+> kv-unlock app). One credential per environment subject; the
+> [ADR 0010](adr/0010-automation-identity-subject-model.md) single-credential-per-subject
+> invariant is unchanged.
 
 The recommended path is the idempotent provisioning script
 [`scripts/New-AutomationEntraApp.ps1`](../scripts/New-AutomationEntraApp.ps1), which reads the app
@@ -75,12 +83,28 @@ Under **Settings → Secrets and variables → Actions**:
   - `AZURE_SUBSCRIPTION_ID`
 - Secrets (Environment: `kv-unlock`):
   - `AZURE_CLIENT_ID_KV_UNLOCK` = the **kv-unlock** app's `appId` (consumed by [`kv-temp-unlock.yml`](../.github/workflows/kv-temp-unlock.yml)).
-- Variables (Environment: `lab`):
+  - `AZURE_TENANT_ID` and `AZURE_SUBSCRIPTION_ID` — the unlock job runs under this Environment, so it reads these from here.
+- Variables (Environment: `lab` — per [ADR 0057](adr/0057-multi-environment-and-branch-model.md) the workflows read every tenant-specific non-secret value from the selected Environment's variables and fail fast when one is unset):
   - `PURVIEW_ACCOUNT_NAME` = `purview-contoso-lab` (or your actual account name)
+  - `PURVIEW_RG` = `rg-purview-lab` (or your actual resource group)
+  - `KEY_VAULT_NAME` = your automation Key Vault name
+  - `TENANT_DOMAIN` = your tenant primary domain (for example `contoso.onmicrosoft.com`)
+  - `DATA_PLANE_CERT_NAME` = the data-plane automation certificate name in that Key Vault
+- Variables (Environment: `kv-unlock`):
+  - `PURVIEW_RG` and `KEY_VAULT_NAME` — same values as the paired deployment environment; the unlock job resolves the vault through its own Environment.
 - Variables (Repository — not environment-scoped, because [`pr-auto-merge.yml`](../.github/workflows/pr-auto-merge.yml) runs without an `environment:`):
   - `OWNER_APPROVAL_LOGIN` = your GitHub login (the lab owner). Two workflows read it: [`pr-auto-merge.yml`](../.github/workflows/pr-auto-merge.yml) only enables merge when the `owner-approved` label is applied by this login, and [`idea-intake-autoadd.yml`](../.github/workflows/idea-intake-autoadd.yml) only auto-adds `needs-review` to issues you open. Set under **Settings → Secrets and variables → Actions → Variables**. See [Store information in variables](https://docs.github.com/en/actions/how-tos/write-workflows/choose-what-workflows-do/use-variables).
 
 Create the `lab` environment and the `kv-unlock` environment (Settings → Environments → New environment). The `kv-unlock` environment gates [`kv-temp-unlock.yml`](../.github/workflows/kv-temp-unlock.yml) independently and should carry its own required-reviewer protection rule per [ADR 0010 §3](adr/0010-automation-identity-subject-model.md).
+
+### Optional: add a `dev` environment (ADR 0057)
+
+Single-environment operation needs nothing beyond the above — every workflow defaults to `lab`. To run a second environment per [ADR 0057](adr/0057-multi-environment-and-branch-model.md):
+
+1. **Create the `dev` and `kv-unlock-dev` GitHub Environments** (Settings → Environments), each with the same secret/variable set as its `lab` / `kv-unlock` counterpart, holding the dev tenant's or dev resource set's values. If your repo carries a `dev` branch, add a deployment branch policy pinning environment `dev` → branch `dev` (and `lab` → your lab-deploying branch) per [Deployment branch policies](https://docs.github.com/en/actions/how-tos/deploy/configure-and-manage-deployments/manage-environments#deployment-branches-and-tags).
+2. **Add the `dev` federated credentials**: on each Entra app, one additional credential with subject `repo:<org>/<repo>:environment:dev` — and on the kv-unlock app, `repo:<org>/<repo>:environment:kv-unlock-dev` (same `az ad app federated-credential create` shape as §1).
+3. **Copy the per-environment configuration files**: `infra/main.bicepparam` → `infra/main.dev.bicepparam` and `infra/parameters/lab.yaml` → `infra/parameters/dev.yaml`, then edit the copies with the dev values. The template ships no dev scaffolds on purpose; `deploy-infra` fails fast if `infra/main.dev.bicepparam` is missing, and the scripts receive `infra/parameters/dev.yaml` through the `PURVIEW_PARAMETERS_FILE` environment variable the workflows set.
+4. **Verify**: dispatch [`validate-oidc-auth.yml`](../.github/workflows/validate-oidc-auth.yml) with `environment: dev`. Every tenant-touching workflow then accepts `environment: dev` on manual dispatch, and pushes to a `dev` branch route there automatically.
 
 ## 3. Point at the existing Purview account
 
