@@ -67,6 +67,11 @@ Sever your copy from the source template so it can never contribute content back
 
 Create a working branch so the tailoring lands as a reviewable diff:
 
+> **Operator downstream repos ([ADR 0057 §8](adr/0057-multi-environment-and-branch-model.md)):**
+> cut the branch from `dev` or `lab`, **not from `main`**. `main` is the upstream mirror and must
+> stay tenant-neutral (empty desired state). Never merge tailoring into `main`. Example:
+> `git checkout -b chore/tenant-intake-lab lab`.
+
 ```bash
 git checkout -b chore/tenant-intake
 ```
@@ -137,7 +142,12 @@ Follow [Getting started §1–§2](getting-started.md) for the exact `az ad app`
    root collection — per
    [Access control in Microsoft Purview](https://learn.microsoft.com/en-us/purview/data-gov-classic-permissions).
 3. In **Settings → Environments → `<env>`**, set secrets `AZURE_CLIENT_ID`, `AZURE_TENANT_ID`,
-   `AZURE_SUBSCRIPTION_ID` and variable `PURVIEW_ACCOUNT_NAME`.
+   `AZURE_SUBSCRIPTION_ID` and the variables `PURVIEW_ACCOUNT_NAME`, `PURVIEW_RG`,
+   `KEY_VAULT_NAME`, `TENANT_DOMAIN`, and `DATA_PLANE_CERT_NAME` — the workflows read every
+   tenant-specific non-secret value from the selected Environment's variables and fail fast when
+   one is unset, per [ADR 0057](adr/0057-multi-environment-and-branch-model.md). See
+   [Getting started §2](getting-started.md) for the per-environment breakdown (including the
+   `kv-unlock` Environment's own secret and variables).
 4. In **Settings → Secrets and variables → Actions → Variables**, set the repository variable
    `OWNER_APPROVAL_LOGIN` to your GitHub login. Two workflows read it: the
    [`pr-auto-merge.yml`](../.github/workflows/pr-auto-merge.yml) workflow only enables auto-merge
@@ -148,8 +158,21 @@ Follow [Getting started §1–§2](getting-started.md) for the exact `az ad app`
    those workflows run without an `environment:`. See
    [Store information in variables](https://docs.github.com/en/actions/how-tos/write-workflows/choose-what-workflows-do/use-variables).
 
+   **Required reviewers on private repos** need GitHub Pro/Team/Enterprise — see
+   [Getting started §2](getting-started.md) for the interim posture on Free private repos.
+
 > Never commit any of these values. They live only in GitHub secrets and in your local
 > `az account set` context.
+
+### Optional — add a second (`dev`) environment
+
+The tailored repo runs single-environment (`lab`) with no further setup — every workflow defaults
+there. If you want an independent `dev` environment (own OIDC credentials, Azure resources, and
+configuration), follow [Getting started § Optional: add a `dev` environment](getting-started.md)
+after this step: create the `dev` / `kv-unlock-dev` GitHub Environments, add the additional
+federated-credential subjects, and copy `infra/main.bicepparam` / `infra/parameters/lab.yaml` to
+their `dev` counterparts. Contract details in
+[ADR 0057](adr/0057-multi-environment-and-branch-model.md).
 
 ## Step 6 — Validate locally
 

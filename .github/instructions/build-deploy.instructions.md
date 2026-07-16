@@ -47,6 +47,8 @@ az deployment group what-if      -g $rg -f infra/main.bicep -p infra/main.bicepp
 az deployment group create       -g $rg -f infra/main.bicep -p infra/main.bicepparam
 ```
 
+The shipped `infra/main.bicepparam` is the `lab` parameter file. For a non-`lab` environment, substitute its `infra/main.<environment>.bicepparam` (created by copying the lab file, [ADR 0057](../../docs/adr/0057-multi-environment-and-branch-model.md)) — `deploy-infra.yml` performs the same selection and fails fast when the file is missing.
+
 Reference: [Deploy Bicep files with Azure CLI](https://learn.microsoft.com/en-us/azure/azure-resource-manager/bicep/deploy-cli), [What-if operation](https://learn.microsoft.com/en-us/azure/azure-resource-manager/bicep/deploy-what-if).
 
 ## Data-plane deploy (Purview REST APIs)

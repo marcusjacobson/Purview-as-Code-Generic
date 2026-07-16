@@ -77,6 +77,8 @@
 .PARAMETER ParametersFile
     Path to the environment parameters YAML file (ADR 0012). Defaults to
     `infra/parameters/lab.yaml` resolved relative to the repo root.
+    When the parameter is omitted, the PURVIEW_PARAMETERS_FILE environment
+    variable (ADR 0057) takes precedence over the lab default.
 
 .PARAMETER DisplayName
     Override the Entra app display name. When omitted (the default), the
@@ -130,8 +132,15 @@ $ErrorActionPreference = 'Stop'
 $scriptRoot = Split-Path -Parent $PSCommandPath
 $repoRoot = Split-Path -Parent $scriptRoot
 
+# When -ParametersFile is omitted, the PURVIEW_PARAMETERS_FILE environment
+# variable (set per-environment by the CI workflows) selects the parameters
+# file. See docs/adr/0057-multi-environment-and-branch-model.md.
 if (-not $ParametersFile) {
-    $ParametersFile = Join-Path $repoRoot 'infra/parameters/lab.yaml'
+    $ParametersFile = if ($env:PURVIEW_PARAMETERS_FILE) {
+        $env:PURVIEW_PARAMETERS_FILE
+    } else {
+        Join-Path $repoRoot 'infra/parameters/lab.yaml'
+    }
 }
 if (-not (Test-Path -LiteralPath $ParametersFile)) {
     Write-Error ("Parameters file not found: '{0}'. See docs/adr/0012-environment-parameters-file.md for the expected shape and infra/parameters/README.md for the consumer contract." -f $ParametersFile)
@@ -340,8 +349,9 @@ if ($fcList.Count -eq 1) {
     # script refuses to mutate a credential whose shape differs from the
     # ADR. Operator must reconcile by hand.
     $mismatches = @()
+    $nameMismatch = $false
     if ($fc.name -ne $expectedFcName) {
-        $mismatches += "name: expected '$expectedFcName', actual '$($fc.name)'"
+        $nameMismatch = $true
     }
     if ($fc.issuer -ne $expectedIssuer) {
         $mismatches += "issuer: expected '$expectedIssuer', actual '$($fc.issuer)'"
@@ -366,6 +376,15 @@ if ($fcList.Count -eq 1) {
     if ($mismatches.Count -gt 0) {
         Write-Error ("Application '{0}' has a federated credential whose shape does not match ADR 0010 decision #2. Mismatches: {1}. Refusing to mutate; reconcile manually." -f $DisplayName, ($mismatches -join '; '))
         return
+    }
+
+    if ($nameMismatch) {
+        # ADR 0057 repository-migration cutover: a temporary credential may
+        # carry a non-canonical name (for example gh-env-lab-ops) while the
+        # issuer/subject/audiences already match. The name is advisory; only
+        # subject/issuer/audiences are security-critical. Canonicalize later
+        # by deleting the credential and re-running this script (ADR 0057 section 7).
+        Write-Warning ("Application '{0}' federated credential name is '{1}' (expected canonical name '{2}'). Subject/issuer/audiences match -- continuing. To canonicalize: delete the credential and re-run this script." -f $DisplayName, $fc.name, $expectedFcName)
     }
 
     Write-Information ("  = Federated credential matches ADR 0010 (id: {0})." -f $fc.id) -InformationAction Continue

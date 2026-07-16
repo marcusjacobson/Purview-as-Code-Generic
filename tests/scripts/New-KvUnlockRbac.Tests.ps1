@@ -75,12 +75,32 @@ Describe 'Resolve-KvFirewallTogglerRole' {
             return $script:AzResponses.Dequeue()
         }
 
-        $result = Resolve-KvFirewallTogglerRole
+        $result = Resolve-KvFirewallTogglerRole -RoleName 'Purview-Lab-KV-Firewall-Toggler' -ResourceGroupName 'rg-purview-lab'
         $result | Should -Be '/subscriptions/00000000-0000-0000-0000-000000000001/providers/Microsoft.Authorization/roleDefinitions/00000000-0000-0000-0000-000000000002'
         $script:AzInvocations.Count | Should -Be 1
         ($script:AzInvocations[0] -join ' ') | Should -Match 'role definition list'
         ($script:AzInvocations[0] -join ' ') | Should -Match '--custom-role-only true'
         ($script:AzInvocations[0] -join ' ') | Should -Match 'Purview-Lab-KV-Firewall-Toggler'
+    }
+
+    It 'queries az with the supplied RoleName parameter (not a hardcoded default)' {
+        $script:AzResponses.Enqueue((@(
+                    [pscustomobject]@{
+                        id       = '/subscriptions/00000000-0000-0000-0000-000000000001/providers/Microsoft.Authorization/roleDefinitions/00000000-0000-0000-0000-000000000005'
+                        name     = '00000000-0000-0000-0000-000000000005'
+                        roleName = 'Purview-Dev-KV-Firewall-Toggler'
+                    }
+                ) | ConvertTo-Json -Depth 5))
+
+        function az {
+            $script:AzInvocations.Add(@($args))
+            $script:LASTEXITCODE = 0
+            return $script:AzResponses.Dequeue()
+        }
+
+        $result = Resolve-KvFirewallTogglerRole -RoleName 'Purview-Dev-KV-Firewall-Toggler' -ResourceGroupName 'rg-purview-dev'
+        $result | Should -Match '00000000-0000-0000-0000-000000000005'
+        ($script:AzInvocations[0] -join ' ') | Should -Match 'Purview-Dev-KV-Firewall-Toggler'
     }
 
     It 'throws with the infra/main.bicep fail-closed guidance when az returns an empty list' {
@@ -92,7 +112,7 @@ Describe 'Resolve-KvFirewallTogglerRole' {
             return $script:AzResponses.Dequeue()
         }
 
-        { Resolve-KvFirewallTogglerRole } |
+        { Resolve-KvFirewallTogglerRole -RoleName 'Purview-Lab-KV-Firewall-Toggler' -ResourceGroupName 'rg-purview-lab' } |
             Should -Throw -ExpectedMessage '*infra/main.bicep*'
     }
 
@@ -108,7 +128,7 @@ Describe 'Resolve-KvFirewallTogglerRole' {
             return $script:AzResponses.Dequeue()
         }
 
-        { Resolve-KvFirewallTogglerRole } |
+        { Resolve-KvFirewallTogglerRole -RoleName 'Purview-Lab-KV-Firewall-Toggler' -ResourceGroupName 'rg-purview-lab' } |
             Should -Throw -ExpectedMessage '*Found 2 custom roles*'
     }
 }

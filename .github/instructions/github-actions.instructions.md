@@ -26,14 +26,16 @@ Before adding or modifying any step, action, or authentication block:
 
 ## Secrets handling
 
-- Store `AZURE_CLIENT_ID`, `AZURE_TENANT_ID`, `AZURE_SUBSCRIPTION_ID` in **environment** secrets (not repo secrets) so the `lab` / `prod` environment gates apply. Source: [GitHub — environment secrets](https://docs.github.com/en/actions/deployment/targeting-different-environments/using-environments-for-deployment#environment-secrets).
+- Store `AZURE_CLIENT_ID`, `AZURE_TENANT_ID`, `AZURE_SUBSCRIPTION_ID` in **environment** secrets (not repo secrets) so the `lab` / `dev` environment gates apply per [ADR 0057](../../docs/adr/0057-multi-environment-and-branch-model.md). Source: [GitHub — environment secrets](https://docs.github.com/en/actions/deployment/targeting-different-environments/using-environments-for-deployment#environment-secrets).
 - Never `echo` a secret. Never write a secret to a step output, to an artifact, to a log, or to `$GITHUB_ENV` / `$GITHUB_OUTPUT`. GitHub redacts exact matches, not derived values.
 - Do not pass secrets as CLI positional arguments where they land in the process table. Prefer env vars.
 
 ## Environments and approvals
 
-- Deployments target a GitHub Environment (`lab`, `prod`, …). `prod` requires required reviewers. Environment protection rules are the only gate between a merged PR and a control-plane change.
-- Every deploying workflow must declare `environment: <name>`: `deploy-infra` on the control plane, and each per-solution `deploy-<solution>` workflow on the data plane ([ADR 0051](../../docs/adr/0051-per-solution-workflow-unit-of-data-plane-apply.md)).
+- Deployments target one of the two ADR 0057 GitHub Environments — `lab` (default) or `dev` — selected by the `environment` dispatch input with the canonical branch mapping `${{ inputs.environment || (github.ref_name == 'dev' && 'dev' || 'lab') }}` (branch `dev` → `dev`, every other branch → `lab`). Keep the expression byte-identical across workflows; [`tests/workflows/EnvironmentRouting.Tests.ps1`](../../tests/workflows/EnvironmentRouting.Tests.ps1) pins it. See [ADR 0057](../../docs/adr/0057-multi-environment-and-branch-model.md).
+- Every deploying workflow must declare `environment:` derived from that expression: `deploy-infra` on the control plane, and each per-solution `deploy-<solution>` workflow on the data plane ([ADR 0051](../../docs/adr/0051-per-solution-workflow-unit-of-data-plane-apply.md)). Dispatch-only workflows (no push/schedule trigger) may use `${{ inputs.environment || 'lab' }}`. `kv-temp-unlock.yml` declares the paired unlock Environment (`lab` → `kv-unlock`, `dev` → `kv-unlock-dev`) on both of its jobs.
+- Environment protection rules (required reviewers, deployment branch policies pinning `lab` → branch `lab`, `dev` → branch `dev` in an operator repo) are the only gate between a merged PR and a control-plane change.
+- Tenant-specific non-secret configuration comes from the selected Environment's **variables** (`PURVIEW_RG`, `TENANT_DOMAIN`, `DATA_PLANE_CERT_NAME`, `KEY_VAULT_NAME`, `PURVIEW_ACCOUNT_NAME`) with a fail-fast guard when unset; never as workflow literals. IDs stay in Environment secrets. Reconcilers receive the per-environment parameters file via `PURVIEW_PARAMETERS_FILE: infra/parameters/<environment>.yaml`.
 
 ## Action supply chain
 
@@ -95,7 +97,7 @@ Everything else in the ADR 0029 contract still applies to Tier-3 workflows: the 
 
 ## Concurrency
 
-- Deploy workflows set `concurrency:` with a group scoped to the environment and `cancel-in-progress: false` so two merges cannot race on the same Purview account.
+- Deploy workflows set `concurrency:` with an **environment-derived** group (`deploy-<surface>-${{ inputs.environment || (github.ref_name == 'dev' && 'dev' || 'lab') }}`, or the shared `kv-firewall-<env>` group for vault-toggling workflows) and `cancel-in-progress: false`, so two merges cannot race on the same Purview account while runs against different environments never queue behind each other (ADR 0057).
 
 ## Runner hygiene
 

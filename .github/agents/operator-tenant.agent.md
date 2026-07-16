@@ -82,6 +82,37 @@ git branch --show-current
   default branch, so the tailoring lands as a reviewable diff. If on the default branch,
   ask the owner to confirm or create a branch.
 
+### Operations-repository branch model (ADR 0057)
+
+When this copy is an **operator downstream repository** (not a fresh template clone), the
+branch model from [ADR 0057 §8](../../docs/adr/0057-multi-environment-and-branch-model.md)
+applies:
+
+| Branch | Role | Tailoring target? |
+|---|---|---|
+| `main` | Upstream mirror — empty desired state, template-shaped | **Never** — do not merge tenant tailoring here |
+| `dev` / `lab` | Operator working branches — populated desired state | **Yes** — run tenant intake on each environment branch that needs its own parameter files |
+
+Rules for operator repos:
+
+1. **Cut tailoring branches from `dev` or `lab`, not from `main`.** Example: `chore/tenant-intake-lab` off `lab`, `chore/tenant-intake-dev` off `dev`.
+2. **Never merge tailoring PRs into `main`.** Promote template-only changes upstream via cherry-pick to the public template; ride downstream via `git merge upstream/main`.
+3. **Per-environment files coexist on every branch:** `infra/parameters/lab.yaml` and `infra/parameters/dev.yaml` are different files — cross-tier merges do not clobber each other.
+4. **Set the repo default branch to `lab`** after environments exist so scheduled sync workflows run against the lab environment (ADR 0057 §8).
+
+If the owner confirms this is an operator repo, ask which environment branch (`dev`, `lab`, or both) the intake targets before Step 1.
+
+### Headless / offline intake (optional)
+
+When an interactive interview is impractical (automation, repeated environments), the owner
+may supply values in a **gitignored** file `tenant-values.local.yaml` at the repo root
+(add `tenant-values.local.yaml` to `.gitignore` if not already present). If that file exists
+and the owner selects `[Apply]`, read its keys instead of running the Step 1 interview — same
+fields as the interview (environment, region, githubOrg, githubRepo, tenantDomain, ownerSlug,
+resourceGroupName, purviewAccountName, keyVaultName, logAnalyticsName, app display names,
+kvFirewallTogglerRoleName, codeownersHandle). **Never commit this file** — it may hold
+environment-specific names the owner considers sensitive even when they are not GUIDs.
+
 ---
 
 ## Step 1 — Interview (Pattern D)
@@ -294,13 +325,13 @@ Only after explicit confirmation, apply the tailoring driven by
      `resourceGroupName`, `tags.owner`, `tags.workload`, `purviewAccountName`,
      `resources.logAnalytics.name`, `resources.keyVault.name`, `automation.githubOrg`,
      `automation.githubRepo`, `automation.githubEnvironment`, `automation.tenantDomain`,
-     `automation.apps.*.displayName`, the `Purview-<Env>-KV-Firewall-Toggler` role name, and the
+     `automation.apps.*.displayName`, `automation.kvFirewallTogglerRoleName`, and the
      content-explorer membership (displayName note or zero-GUID). **If Step 1a left the Purview
      account target unconfirmed**, keep the `purview-contoso-lab` placeholder for `purviewAccountName`
      (here, in `main.bicepparam`, and the `collections.yaml` `rootCollection`) and add the "account
      unconfirmed — owner action required" note — never write a guessed name
      ([ADR 0048](../../docs/adr/0048-purview-account-discovery-gate.md) §Decision item 6).
-   - **`infra/main.bicepparam`** — `purviewAccountName`, `location`, `keyVaultName`, `tags` (incl. `tenant`).
+   - **`infra/main.bicepparam`** — `purviewAccountName`, `location`, `keyVaultName`, `kvFirewallTogglerRoleName`, `tags` (incl. `tenant`).
    - **`infra/main.bicep`, `infra/modules/law.bicep`, `infra/modules/keyvault.bicep`** — the
      `owner: 'contoso-lab'` default tags and the naming `@description` examples. **These module
      surfaces were missed by the pre-manifest edit list** ([ADR 0046](../../docs/adr/0046-tenant-placeholder-manifest.md)) — do not skip them.
@@ -317,15 +348,10 @@ Only after explicit confirmation, apply the tailoring driven by
    - **`.github/CODEOWNERS`** — replace every `@OWNER-PLACEHOLDER` with the Step-1 handle
      (codeownersHandle), and the `(contoso-lab)` slug in the line-1 header comment with the owner slug
      (ownerSlug). The repo name `Purview-as-Code` in the header is not a tenant token; leave it.
-   - **`.github/workflows/**`** — replace only the **functional** tenant values (missed pre-manifest,
-     [ADR 0046](../../docs/adr/0046-tenant-placeholder-manifest.md)): the `KEY_VAULT_NAME:` env
-     default in every `deploy-<solution>.yml` and `sync-<solution>-from-tenant.yml` workflow, plus
-     `drift-detection.yml` / `kv-temp-unlock.yml` / `validate-oidc-auth.yml`, and the
-     `TENANT_DOMAIN:` env in `validate-oidc-auth.yml`. The owner-login gate in
-     `idea-intake-autoadd.yml` is **no longer a tenant surface** — it reads the
-     `OWNER_APPROVAL_LOGIN` repository variable (the same variable `pr-auto-merge.yml` uses), so
-     there is nothing to replace. The many other `contoso` refs in workflows are cosmetic
-     (issue-body prose, doc-link URLs, `--title` strings) — update-optional, not deploy-breaking.
+   - **`.github/workflows/**`** — per ADR 0057, workflows no longer carry functional tenant
+     literals (values come from GitHub Environment variables). **Do not edit workflow files
+     during tenant intake** unless a residual scan flags a regression. Cosmetic `contoso`
+     prose in issue bodies remains optional to update.
    - **`docs/getting-started.md`** — replace the org/repo in the OIDC federated-credential `subject`
      and the account name in the deploy examples. Keep the corrected **per-plane app model** and the
      **`:environment:<env>` subject shape** (per [ADR 0010](../../docs/adr/0010-automation-identity-subject-model.md)):

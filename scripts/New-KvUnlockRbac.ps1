@@ -64,6 +64,8 @@
 .PARAMETER ParametersFile
     Path to the environment parameters YAML file (ADR 0012). Defaults to
     `infra/parameters/lab.yaml` resolved relative to the repo root.
+    When the parameter is omitted, the PURVIEW_PARAMETERS_FILE environment
+    variable (ADR 0057) takes precedence over the lab default.
 
 .PARAMETER ResourceGroupName
     Resource group that owns the Key Vault. When omitted, resolved from
@@ -76,6 +78,11 @@
 .PARAMETER AppDisplayName
     Entra display name of the kv-unlock app. When omitted, resolved from
     `automation.apps.kvUnlock.displayName:` in the parameters file.
+
+.PARAMETER RoleName
+    Display name of the Key Vault firewall-toggler custom role. When omitted,
+    resolved from `automation.kvFirewallTogglerRoleName:` in the parameters
+    file (ADR 0057), falling back to `Purview-Lab-KV-Firewall-Toggler`.
 
 .EXAMPLE
     ./scripts/New-KvUnlockRbac.ps1 -WhatIf
@@ -112,7 +119,11 @@ param(
 
     [Parameter()]
     [ValidatePattern('^[A-Za-z][A-Za-z0-9\-]{1,62}[A-Za-z0-9]$')]
-    [string]$AppDisplayName
+    [string]$AppDisplayName,
+
+    [Parameter()]
+    [ValidateNotNullOrEmpty()]
+    [string]$RoleName
 )
 
 $ErrorActionPreference = 'Stop'
@@ -174,16 +185,20 @@ function Resolve-KvUnlockSp {
 # (`/subscriptions/<sub>/providers/Microsoft.Authorization/roleDefinitions/<guid>`).
 function Resolve-KvFirewallTogglerRole {
     [CmdletBinding()]
-    param()
+    param(
+        [Parameter(Mandatory)]
+        [string]$RoleName,
 
-    $roleName = 'Purview-Lab-KV-Firewall-Toggler'
+        [Parameter(Mandatory)]
+        [string]$ResourceGroupName
+    )
 
     # Reference: https://learn.microsoft.com/en-us/cli/azure/role/definition#az-role-definition-list
-    # `--custom-role-only true` filters out built-ins; the lab's custom
-    # role is unique by name within the subscription.
-    $roleJson = az role definition list --custom-role-only true --name $roleName -o json --only-show-errors 2>$null
+    # `--custom-role-only true` filters out built-ins; the custom role is
+    # unique by name within the subscription.
+    $roleJson = az role definition list --custom-role-only true --name $RoleName -o json --only-show-errors 2>$null
     if ($LASTEXITCODE -ne 0) {
-        throw "az role definition list failed with exit code $LASTEXITCODE for role '$roleName'."
+        throw "az role definition list failed with exit code $LASTEXITCODE for role '$RoleName'."
     }
     $roles = @()
     if ($roleJson) {
@@ -191,15 +206,15 @@ function Resolve-KvFirewallTogglerRole {
     }
     if ($roles.Count -eq 0) {
         throw @"
-Custom role '$roleName' was not found in the current subscription. PR D1a's `infra/modules/role-definitions.bicep` must be deployed before this script can run. Apply it with:
+Custom role '$RoleName' was not found in the current subscription. PR D1a's `infra/modules/role-definitions.bicep` must be deployed before this script can run. Apply it with:
 
-    az deployment group create -g rg-purview-lab -f infra/main.bicep -p infra/main.bicepparam
+    az deployment group create -g $ResourceGroupName -f infra/main.bicep -p infra/main.bicepparam
 
-The deploying identity needs Owner or User Access Administrator on the subscription (Contributor does not include `Microsoft.Authorization/roleDefinitions/write`).
+The deploying identity needs Owner or User Access Administrator at subscription scope (Contributor does not include `Microsoft.Authorization/roleDefinitions/write`).
 "@
     }
     if ($roles.Count -gt 1) {
-        throw "Found $($roles.Count) custom roles named '$roleName'. Reconcile manually before re-running."
+        throw "Found $($roles.Count) custom roles named '$RoleName'. Reconcile manually before re-running."
     }
     return $roles[0].id
 }
@@ -211,8 +226,15 @@ The deploying identity needs Owner or User Access Administrator on the subscript
 $scriptRoot = Split-Path -Parent $PSCommandPath
 $repoRoot = Split-Path -Parent $scriptRoot
 
+# When -ParametersFile is omitted, the PURVIEW_PARAMETERS_FILE environment
+# variable (set per-environment by the CI workflows) selects the parameters
+# file. See docs/adr/0057-multi-environment-and-branch-model.md.
 if (-not $ParametersFile) {
-    $ParametersFile = Join-Path $repoRoot 'infra/parameters/lab.yaml'
+    $ParametersFile = if ($env:PURVIEW_PARAMETERS_FILE) {
+        $env:PURVIEW_PARAMETERS_FILE
+    } else {
+        Join-Path $repoRoot 'infra/parameters/lab.yaml'
+    }
 }
 if (-not (Test-Path -LiteralPath $ParametersFile)) {
     Write-Error ("Parameters file not found: '{0}'. See docs/adr/0012-environment-parameters-file.md for the expected shape." -f $ParametersFile)
@@ -253,12 +275,22 @@ if (-not $parameters.automation.ContainsKey('apps') -or
 if (-not $ResourceGroupName) { $ResourceGroupName = [string]$parameters.resourceGroupName }
 if (-not $VaultName)         { $VaultName         = [string]$parameters.resources.keyVault.name }
 if (-not $AppDisplayName)    { $AppDisplayName    = [string]$parameters.automation.apps.kvUnlock.displayName }
+if (-not $RoleName) {
+    if ($parameters.automation.ContainsKey('kvFirewallTogglerRoleName') -and
+        -not [string]::IsNullOrWhiteSpace([string]$parameters.automation.kvFirewallTogglerRoleName)) {
+        $RoleName = [string]$parameters.automation.kvFirewallTogglerRoleName
+    }
+    else {
+        $RoleName = 'Purview-Lab-KV-Firewall-Toggler'
+    }
+}
 
 Write-Information ("Parameters file: {0}" -f $ParametersFile) -InformationAction Continue
 Write-Information ("Environment: {0}" -f $parameters.environment) -InformationAction Continue
 Write-Information ("Resource group: {0}" -f $ResourceGroupName) -InformationAction Continue
 Write-Information ("Key Vault: {0}" -f $VaultName) -InformationAction Continue
 Write-Information ("kv-unlock app: {0}" -f $AppDisplayName) -InformationAction Continue
+Write-Information ("custom role   : {0}" -f $RoleName) -InformationAction Continue
 
 #endregion
 
@@ -310,7 +342,7 @@ if (-not $vaultJson) {
 $kvUnlockSpObjectId = Resolve-KvUnlockSp -DisplayName $AppDisplayName
 Write-Information ("kv-unlock SP objectId: {0}" -f $kvUnlockSpObjectId) -InformationAction Continue
 
-$kvFirewallTogglerRoleId = Resolve-KvFirewallTogglerRole
+$kvFirewallTogglerRoleId = Resolve-KvFirewallTogglerRole -RoleName $RoleName -ResourceGroupName $ResourceGroupName
 Write-Information ("custom role id      : {0}" -f $kvFirewallTogglerRoleId) -InformationAction Continue
 
 #endregion
@@ -339,7 +371,7 @@ if ($LASTEXITCODE -ne 0) {
     return
 }
 
-$target = "Purview-Lab-KV-Firewall-Toggler -> kv-unlock SP at vault '$VaultName' scope"
+$target = "$RoleName -> kv-unlock SP at vault '$VaultName' scope"
 $action = 'Deploy kv-unlock RBAC via infra/modules/kv-unlock-rbac.bicep'
 
 if (-not $PSCmdlet.ShouldProcess($target, $action)) {
