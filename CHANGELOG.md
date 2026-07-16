@@ -14,9 +14,15 @@ To add an entry:
 1. **Date heading.** Find or create a `## YYYY-MM-DD` heading for the merge date (in the lab's same-day cadence, today's date). Newest date first — a new date heading goes directly below this section, above all older dates.
 2. **Category.** Under that date, find or create the matching `### <Category>` subsection, mapping the PR's Conventional-Commit type: `feat` → Added, `fix` → Fixed, `refactor` / `chore` → Changed, `perf` → Performance, `revert` → Reverted, `docs` → Documentation, `test` → Tests, `ci` → CI/CD, `build` → Build; a deletion uses Removed. Keep categories in the order Added, Changed, Fixed, Removed, Performance, Reverted, Documentation, Tests, CI/CD, Build.
 3. **Bullet.** Add `- **<scope>:** <subject> (#NNN)` at the top of that category, where `<scope>` is the commit scope, `<subject>` is the Conventional-Commit subject without its `type(scope):` prefix, and `#NNN` is the originating issue number. Historical entries reference the squash-merge PR instead; either renders as a link on GitHub.
-4. **Exemption.** A PR whose only change is this file (a manual changelog fix) does not add an entry for itself.
+4. **Exemption.** A PR whose only change is this file (a manual changelog fix) does not add an entry for itself. Pure upstream mirror-sync PRs that carry only upstream CHANGELOG entries and no repo-local changes may omit a new bullet (the upstream entries already document the imported changes).
 
 ## 2026-07-16
+
+### Changed
+
+- **scripts:** `New-KvUnlockRbac.ps1` resolves the firewall-toggler role name from `automation.kvFirewallTogglerRoleName` in the parameters file (or `-RoleName`), closing the ADR 0057 §6 gap where Bicep parameterized the name but the grant script hardcoded `Purview-Lab-KV-Firewall-Toggler` (#123).
+- **scripts:** `New-AutomationEntraApp.ps1` and `New-KvUnlockEntraApp.ps1` treat federated-credential **name** as advisory when issuer/subject/audiences match — supports repository-migration cutover with a temporary name like `gh-env-lab-ops` (ADR 0057 §7 step 4).
+- **docs:** operator-branch model in `@operator-tenant`, greenfield bootstrap sequence in `automation-identity.md`, GitHub plan prerequisite for required reviewers on private repos in `getting-started.md` (#123).
 
 ### Added
 

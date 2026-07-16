@@ -209,8 +209,9 @@ function Assert-KvUnlockFederatedCredential {
 
     $fc = $FcList[0]
     $mismatches = @()
+    $nameMismatch = $false
     if ($fc.name -ne $Expected.FcName) {
-        $mismatches += "name: expected '$($Expected.FcName)', actual '$($fc.name)'"
+        $nameMismatch = $true
     }
     if ($fc.issuer -ne $Expected.Issuer) {
         $mismatches += "issuer: expected '$($Expected.Issuer)', actual '$($fc.issuer)'"
@@ -235,6 +236,10 @@ function Assert-KvUnlockFederatedCredential {
 
     if ($mismatches.Count -gt 0) {
         throw "Application '$DisplayName' has a federated credential whose shape does not match the kv-unlock contract. Mismatches: $($mismatches -join '; '). Refusing to mutate; reconcile manually."
+    }
+
+    if ($nameMismatch) {
+        Write-Warning ("Application '$DisplayName' federated credential name is '$($fc.name)' (expected canonical name '$($Expected.FcName)'). Subject/issuer/audiences match — continuing. To canonicalize: delete the credential and re-run this script (ADR 0057 §7).")
     }
 
     return $fc

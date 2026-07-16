@@ -1023,6 +1023,9 @@ Under **Settings → Secrets and variables → Actions**:
 
 Create the `lab` environment and the `kv-unlock` environment (Settings → Environments → New environment). The `kv-unlock` environment gates [`kv-temp-unlock.yml`](../.github/workflows/kv-temp-unlock.yml) independently and should carry its own required-reviewer protection rule per [ADR 0010 §3](adr/0010-automation-identity-subject-model.md).
 
+> [!NOTE]
+> **GitHub plan prerequisite for required reviewers on private repos.** Deployment branch policies (pinning environment `lab` → branch `lab`) work on all plans. **Required reviewers** on Environment protection rules require GitHub **Pro**, **Team**, or **Enterprise** — on GitHub Free with a private repo, configuring required reviewers returns HTTP 422. Interim posture until plan upgrade: rely on deployment branch policy plus the per-environment OIDC subject as the two-layer guard ([ADR 0010 §3](adr/0010-automation-identity-subject-model.md)); the human-approval click before token mint is the piece lost on Free private repos. Public repos can use required reviewers on Free.
+
 ### Optional: add a `dev` environment (ADR 0057)
 
 Single-environment operation needs nothing beyond the above — every workflow defaults to `lab`. To run a second environment per [ADR 0057](adr/0057-multi-environment-and-branch-model.md):
@@ -1034,7 +1037,24 @@ Single-environment operation needs nothing beyond the above — every workflow d
 
 ## 3. Point at the existing Purview account
 
-The `contoso-lab` account already exists, so the control-plane deploy will reconcile its properties (idempotent). Before the first run:
+### Greenfield path (no Purview account yet)
+
+If the tenant has **no** Purview account, bootstrap in this order (full detail in [`automation-identity.md`](solutions/governance-foundation/automation-identity.md)):
+
+1. Create the resource group: `az group create -n rg-purview-lab -l eastus` (or your region from `infra/parameters/lab.yaml`).
+2. Run Wave 0 steps 5.0–5a (Log Analytics + Key Vault) via the `New-*.ps1` scripts.
+3. Deploy control plane **including the Purview account** with subscription-scope **Owner** or **User Access Administrator** (Contributor cannot create custom role definitions):
+
+   ```bash
+   az deployment group create -g rg-purview-lab -f infra/main.bicep -p infra/main.bicepparam
+   ```
+
+4. Grant yourself **Key Vault Certificates Officer** on the vault, then run 5b–5d (Entra apps, data-plane certificate, RBAC).
+5. Assign Purview data-plane roles to the data-plane SP at the root collection (§1 above), then proceed to §4 export/deploy.
+
+### Brownfield path (account already exists)
+
+The `contoso-lab` account already holds live state in the template's worked example. Before the first run:
 
 1. Edit [`infra/main.bicepparam`](../infra/main.bicepparam) so `purviewAccountName` and `location` match the existing account.
 2. Edit [`data-plane/collections/collections.yaml`](../data-plane/collections/collections.yaml) so `rootCollection` equals the existing account name (root collection shares the account name).
@@ -1322,6 +1342,11 @@ Sever your copy from the source template so it can never contribute content back
 
 Create a working branch so the tailoring lands as a reviewable diff:
 
+> **Operator downstream repos ([ADR 0057 §8](adr/0057-multi-environment-and-branch-model.md)):**
+> cut the branch from `dev` or `lab`, **not from `main`**. `main` is the upstream mirror and must
+> stay tenant-neutral (empty desired state). Never merge tailoring into `main`. Example:
+> `git checkout -b chore/tenant-intake-lab lab`.
+
 ```bash
 git checkout -b chore/tenant-intake
 ```
@@ -1407,6 +1432,9 @@ Follow [Getting started §1–§2](getting-started.md) for the exact `az ad app`
    and skips rather than failing). It is a repository variable (not environment-scoped) because
    those workflows run without an `environment:`. See
    [Store information in variables](https://docs.github.com/en/actions/how-tos/write-workflows/choose-what-workflows-do/use-variables).
+
+   **Required reviewers on private repos** need GitHub Pro/Team/Enterprise — see
+   [Getting started §2](getting-started.md) for the interim posture on Free private repos.
 
 > Never commit any of these values. They live only in GitHub secrets and in your local
 > `az account set` context.

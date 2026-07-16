@@ -119,6 +119,10 @@ automation:
   # `environment:` key in the deploy workflow jobs and the subject claim on
   # the federated credential.
   githubEnvironment: lab
+  # Display name of the Key Vault firewall-toggler custom role (ADR 0057).
+  # Passed through infra/main.bicepparam as kvFirewallTogglerRoleName and
+  # consumed by scripts/New-KvUnlockRbac.ps1 when granting the kv-unlock SP.
+  kvFirewallTogglerRoleName: Purview-Lab-KV-Firewall-Toggler
   # Tenant primary domain. Consumed by any script that calls
   # `Connect-IPPSSession -Organization` for Security & Compliance
   # PowerShell (Wave 0 #4 and onward). Environment-variable because each

@@ -17,13 +17,17 @@ Per [ADR 0011 §5](../../adr/0011-certificate-lifecycle.md), only the **data-pla
 
 Run these in order. Each is idempotent and re-runnable.
 
-| Step | Script | Owns |
+| Step | Script / command | Owns |
 |---|---|---|
+| 0 | `az group create -g <rg> -l <region>` | Resource group prerequisite (must exist before any orchestrator; the deploy identity is RG-scoped per ADR 0010) |
 | 5.0 | [`New-LogAnalyticsWorkspace.ps1`](log-analytics.md) | LAW that backs the KV audit sink |
 | 5a | [`New-AutomationKeyVault.ps1`](../../../scripts/New-AutomationKeyVault.ps1) | Key Vault with RBAC mode, 90-day soft-delete, purge protection, `AuditEvent` sink |
+| **4** | **`az deployment group create -g <rg> -f infra/main.bicep -p infra/main.bicepparam`** | **Purview account + custom role definitions (`role-definitions.bicep`). Requires subscription-scope Owner or User Access Administrator — Contributor cannot create custom roles.** |
 | 5b | [`New-AutomationEntraApp.ps1`](../../../scripts/New-AutomationEntraApp.ps1) | One Entra app + service principal + federated credential per plane |
+| **5b½** | **Operator grants self `Key Vault Certificates Officer` on the vault** | **Prerequisite before 5c — listed in Required roles below but must run as an ordered step here** |
 | 5c | [`New-AutomationCertificate.ps1`](../../../scripts/New-AutomationCertificate.ps1) | Data-plane self-signed certificate in Key Vault + `keyCredentials` upload to the data-plane app + per-cert / per-vault KV RBAC |
-| 5d | [`New-AutomationRbac.ps1`](../../../scripts/New-AutomationRbac.ps1) | Azure RBAC the apps need at deploy time (`Contributor` on RG for control plane; `Key Vault Crypto User` for `keys/sign` and `Key Vault Contributor` for the firewall toggle on the vault for data plane) |
+| 5d | [`New-AutomationRbac.ps1`](../../../scripts/New-AutomationRbac.ps1) | Azure RBAC the apps need at deploy time (`Contributor` on RG for control plane; KV roles for data plane) |
+| D1b | [`New-KvUnlockEntraApp.ps1`](../../../scripts/New-KvUnlockEntraApp.ps1) + [`New-KvUnlockRbac.ps1`](../../../scripts/New-KvUnlockRbac.ps1) | kv-unlock app + vault-scoped firewall-toggler role assignment (reads `automation.kvFirewallTogglerRoleName` from parameters file per ADR 0057) |
 
 Each script is a thin orchestrator around a Bicep module or an `az ad` call. The four-switch reconciler contract (`-PruneMissing` / `-Force` / `-ExportCurrentState`) does **not** apply — these are imperative primitives, not catalog reconcilers.
 

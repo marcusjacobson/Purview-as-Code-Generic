@@ -67,6 +67,11 @@ Sever your copy from the source template so it can never contribute content back
 
 Create a working branch so the tailoring lands as a reviewable diff:
 
+> **Operator downstream repos ([ADR 0057 §8](adr/0057-multi-environment-and-branch-model.md)):**
+> cut the branch from `dev` or `lab`, **not from `main`**. `main` is the upstream mirror and must
+> stay tenant-neutral (empty desired state). Never merge tailoring into `main`. Example:
+> `git checkout -b chore/tenant-intake-lab lab`.
+
 ```bash
 git checkout -b chore/tenant-intake
 ```
@@ -152,6 +157,9 @@ Follow [Getting started §1–§2](getting-started.md) for the exact `az ad app`
    and skips rather than failing). It is a repository variable (not environment-scoped) because
    those workflows run without an `environment:`. See
    [Store information in variables](https://docs.github.com/en/actions/how-tos/write-workflows/choose-what-workflows-do/use-variables).
+
+   **Required reviewers on private repos** need GitHub Pro/Team/Enterprise — see
+   [Getting started §2](getting-started.md) for the interim posture on Free private repos.
 
 > Never commit any of these values. They live only in GitHub secrets and in your local
 > `az account set` context.
