@@ -16,6 +16,12 @@ To add an entry:
 3. **Bullet.** Add `- **<scope>:** <subject> (#NNN)` at the top of that category, where `<scope>` is the commit scope, `<subject>` is the Conventional-Commit subject without its `type(scope):` prefix, and `#NNN` is the originating issue number. Historical entries reference the squash-merge PR instead; either renders as a link on GitHub.
 4. **Exemption.** A PR whose only change is this file (a manual changelog fix) does not add an entry for itself. Pure upstream mirror-sync PRs that carry only upstream CHANGELOG entries and no repo-local changes may omit a new bullet (the upstream entries already document the imported changes).
 
+## 2026-07-17
+
+### Added
+
+- **scripts:** `New-RepoLabels.ps1` — idempotent seeder for the full GitHub label set the automation depends on (#129). GitHub's "Use this template" does not copy labels, so every spin-off starts with the label-gated automation dormant: `pr-auto-merge.yml` / `@owner-approval` gate on `owner-approved` (observed live downstream as `'owner-approved' not found` at merge time), `@idea-intake` on `needs-review`, destructive PRs on `destructive`, issue triage on the five `squad:*` labels, and the watch loops on `code-currency` / `surface-watch` / `watch-list` / `drift-detected`. The seeder creates only missing labels (operator customizations survive re-runs), matching the create-only-missing idiom the `sync-*-from-tenant` drift steps already use; three labels — `owner-approved`, `destructive`, `surface-watch` — have no run-time self-seeding fallback, so this is the only thing that creates them. `New-RepoLabels.Tests.ps1` pins the set against the labels the committed workflows actually reference (coverage assertion goes red if a workflow gates on a label the seeder would not create; verified non-vacuous by red-replay). Kickoff/onboarding docs (`kickoff-guide.md`, `tenant-onboarding.md`, `@operator-kickoff` handoff) gain the seeding step.
+
 ## 2026-07-16
 
 ### Changed
