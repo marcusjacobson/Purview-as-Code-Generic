@@ -16,6 +16,16 @@ To add an entry:
 3. **Bullet.** Add `- **<scope>:** <subject> (#NNN)` at the top of that category, where `<scope>` is the commit scope, `<subject>` is the Conventional-Commit subject without its `type(scope):` prefix, and `#NNN` is the originating issue number. Historical entries reference the squash-merge PR instead; either renders as a link on GitHub.
 4. **Exemption.** A PR whose only change is this file (a manual changelog fix) does not add an entry for itself. Pure upstream mirror-sync PRs that carry only upstream CHANGELOG entries and no repo-local changes may omit a new bullet (the upstream entries already document the imported changes).
 
+## 2026-07-17
+
+### Added
+
+- **infra:** `deployPurviewAccount bool` parameter (default `true`) makes the classic `Microsoft.Purview/accounts` resource conditional in `main.bicep` (#127). Operators on the tenant-level Unified Catalog experience ([ADR 0047](docs/adr/0047-unified-catalog-preview-api-coexistence.md)/[ADR 0048](docs/adr/0048-purview-account-discovery-gate.md) — no classic account exists, and a PAYG metering resource must never be targeted) can now run the canonical `az deployment group create -f infra/main.bicep` with `--parameters deployPurviewAccount=false` and still get the `role-definitions` module (the KV firewall-toggler role `kv-temp-unlock.yml` depends on); previously they had to deploy the module standalone, violating the canonical-commands rule (observed downstream). Outputs are `''` under the documented ternary guard (`systemAssignedPrincipalId` uses the null-forgiving operator for BCP318); ARM's `if()` evaluates only the matching branch, so the `reference()` never fires when the account is skipped; `main.json` regenerated with the same bicep 0.44.1.10279.
+
+### Documentation
+
+- **docs:** define the `PURVIEW_ACCOUNT_NAME` Environment-variable contract for unified-only operators: **omit the variable** (#127). Verified against current main: no workflow consumes or guards it — each workflow's fail-fast guard checks exactly the variables that workflow consumes, so `validate-oidc-auth.yml` running green without it is by design; the variable feeds only the classic reconcilers' `${env:PURVIEW_ACCOUNT_NAME}` tokens via `Resolve-EnvTokens.ps1` (ADR 0023 Category 2, named unset-token error — fail-closed on a tenant classic reconcilers cannot drive anyway), matching the ADR 0048 outcome matrix (placeholder stays on confirmed-unified tenants). Corrects the docs that overstated the guard behavior (`getting-started.md` §2, `tenant-onboarding.md` Step 5, `kickoff-guide.md` §4, `github-actions.instructions.md`, `operator-tenant.agent.md`); adds the unified-only deploy path to `getting-started.md` §3 and the canonical account-less command to `build-deploy.instructions.md`.
+
 ## 2026-07-16
 
 ### Changed
