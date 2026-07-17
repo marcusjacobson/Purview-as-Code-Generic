@@ -285,11 +285,24 @@ jobs:
             -o tsv)
           PNA=$(echo "$STATE" | cut -f1)
           DA=$(echo "$STATE" | cut -f2)
-          if [ "$PNA" != "Enabled" ] || [ "$DA" != "Allow" ]; then
-            echo "::error::Key Vault open did not stick (publicNetworkAccess=$PNA, defaultAction=$DA; expected Enabled/Allow). Since 'az keyvault update' exited 0, an Azure Policy 'modify' effect most likely rewrote the value inside the same operation -- check the Activity Log for a Microsoft.Authorization/policies/modify/action event at the 'Open Key Vault firewall' timestamp, and see the 'Governed tenants' section of docs/runbooks/kv-temp-unlock.md for the bounded policy-exemption procedure." >&2
+          # publicNetworkAccess is the gating layer. When it reads back != Enabled
+          # after an `az keyvault update` that exited 0, an Azure Policy `modify`
+          # effect most likely rewrote it inside the same operation (the
+          # governed-tenant failure mode).
+          if [ "$PNA" != "Enabled" ]; then
+            echo "::error::Key Vault open did not stick (publicNetworkAccess=$PNA; expected Enabled). Since 'az keyvault update' exited 0, an Azure Policy 'modify' effect most likely rewrote publicNetworkAccess inside the same operation -- check the Activity Log for a Microsoft.Authorization/policies/modify/action event at the 'Open Key Vault firewall' timestamp, and see the 'Governed tenants' section of docs/runbooks/kv-temp-unlock.md for the bounded policy-exemption procedure." >&2
             exit 1
           fi
-          echo "Open verified: publicNetworkAccess=Enabled, defaultAction=Allow."
+          # Enabling public access with an all-Allow / no-rules ACL makes Azure
+          # normalize networkAcls.defaultAction to null (read back as "None" via
+          # -o tsv): publicNetworkAccess=Enabled with defaultAction Allow OR None
+          # is open (allow-all). Only a *persisting* Deny with no allow rules
+          # keeps the data plane unreachable while publicNetworkAccess is Enabled.
+          if [ "$DA" = "Deny" ]; then
+            echo "::error::Key Vault publicNetworkAccess is Enabled but networkAcls.defaultAction is still Deny with no allow rules -- the data plane stays unreachable. A policy 'modify' effect may have re-Denied the ACL after the open. See the 'Governed tenants' section of docs/runbooks/kv-temp-unlock.md." >&2
+            exit 1
+          fi
+          echo "Open verified: publicNetworkAccess=Enabled, defaultAction=${DA:-None} (Enabled with a non-Deny ACL is open)."
 
       - name: Hold the vault open for the approved duration
         id: hold
