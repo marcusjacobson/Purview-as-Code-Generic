@@ -14,7 +14,7 @@
       * The pre-commit checklist requires `destructive` on destructive PRs.
       * issue-triage.yml routes on the five `squad:*` labels.
       * The watch loops file issues under `code-currency`, `surface-watch`,
-        and `watch-list`; drift issues carry `drift-detected`.
+        `watch-list`, and `upstream-delta`; drift issues carry `drift-detected`.
 
     Some workflows self-seed their own labels at run time (issue-triage,
     idea-intake-autoadd, code-currency-watch, watch-list-review, the
@@ -87,6 +87,7 @@ function Get-RequiredLabel {
         [pscustomobject]@{ Name = 'code-currency'; Color = '1d76db'; Description = 'Code-currency watch loop finding (Slice 12)' }
         [pscustomobject]@{ Name = 'surface-watch'; Color = '006b75'; Description = 'Surface-watch loop finding (new Learn surface inventory drift)' }
         [pscustomobject]@{ Name = 'watch-list'; Color = '5319e7'; Description = 'Watch-list re-open-trigger review loop finding (#725)' }
+        [pscustomobject]@{ Name = 'upstream-delta'; Color = 'd4c5f9'; Description = 'Upstream delta watch: operator branches carry changes owed to the template' }
         [pscustomobject]@{ Name = 'squad:lead-architect'; Color = '0075ca'; Description = 'Routed to Lead Architect persona' }
         [pscustomobject]@{ Name = 'squad:security-specialist'; Color = 'e4e669'; Description = 'Routed to Security Specialist persona' }
         [pscustomobject]@{ Name = 'squad:automation-engineer'; Color = '0052cc'; Description = 'Routed to Automation Engineer persona' }

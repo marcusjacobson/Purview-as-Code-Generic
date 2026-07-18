@@ -224,6 +224,9 @@ if (-not (Test-Path -LiteralPath $IndexPath)) {
     throw "Landing page not found at: $IndexPath"
 }
 
+# Resolve to a full path first: a bare relative filename (-IndexPath contributing.html)
+# would otherwise make Split-Path return '' and every Join-Path below fail.
+$IndexPath = (Resolve-Path -LiteralPath $IndexPath).Path
 $repoRoot = Split-Path -Parent $IndexPath
 
 # Normalise CRLF -> LF so comparison and output are platform-independent.

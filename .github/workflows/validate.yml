@@ -264,14 +264,26 @@ jobs:
   landing-page-embeds:
     name: Landing page embedded docs freshness
     runs-on: ubuntu-latest
-    # Verifies that the offline documentation snapshots embedded in index.html
-    # (the file:// fallback for the reader panel) still match their source docs
-    # (README.md + docs/**). If a source doc changed without refreshing the
+    # Verifies that the offline documentation snapshots embedded in each landing
+    # page (the file:// fallback for the reader panel) still match their source
+    # docs (README.md + docs/**). If a source doc changed without refreshing the
     # snapshots, this fails. Regenerate and commit with:
     #   pwsh ./scripts/Update-LandingPageEmbeds.ps1
+    #   pwsh ./scripts/Update-LandingPageEmbeds.ps1 -IndexPath contributing.html
     # Reference: https://learn.microsoft.com/en-us/powershell/module/microsoft.powershell.core/about/about_functions_cmdletbindingattribute
     steps:
       - uses: actions/checkout@v4
-      - name: Check embedded docs are current
+      - name: Check embedded docs are current (index.html)
         shell: pwsh
         run: ./scripts/Update-LandingPageEmbeds.ps1 -Check
+      - name: Check embedded docs are current (contributing.html, when present)
+        shell: pwsh
+        # Existence-guarded so this workflow stays byte-identical between the template
+        # and operator copies: contributing.html is an operator-only landing page.
+        run: |
+          if (Test-Path 'contributing.html') {
+            ./scripts/Update-LandingPageEmbeds.ps1 -IndexPath contributing.html -Check
+          }
+          else {
+            Write-Host 'contributing.html not present in this copy -- skipping.'
+          }
